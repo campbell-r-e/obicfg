@@ -9,6 +9,11 @@ System Status
 <value hash="cccc0001" type="input" default=" " current="192.0.2.50" >
 </value>
 </parameter>
+<parameter name="MACAddress" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0009" type="input" default=" " current="000000000001" >
+</value>
+</parameter>
 </object>
 <object name="Product Information" access="readOnly" >
 <parameter name="ModelName" access="readOnly" >

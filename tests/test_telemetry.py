@@ -201,3 +201,63 @@ class TestRead:
         import json
 
         json.dumps(data)  # must not raise
+
+
+class TestRedactCoversIdentity:
+    def test_serial_and_mac_are_masked(self):
+        reading = telemetry.Telemetry(
+            device=telemetry.parse_status(fixture("EXAMPLE_STATUS_.xml")),
+            port=telemetry.PortStatus(),
+            quality=[],
+            calls=[],
+        )
+        assert reading.device.serial == "0000TESTSERIAL"
+        telemetry.redact(reading)
+        assert reading.device.serial == "<redacted>"
+        assert reading.device.mac == "<redacted>"
+
+    def test_absent_identity_fields_are_left_alone(self):
+        reading = telemetry.Telemetry(
+            device=telemetry.DeviceStatus(),
+            port=telemetry.PortStatus(),
+            quality=[],
+            calls=[],
+        )
+        telemetry.redact(reading)
+        assert reading.device.serial is None
+        assert reading.device.mac is None
+
+
+class TestCallTimingEdges:
+    def test_a_malformed_clock_yields_no_duration(self):
+        assert telemetry._seconds("nope") is None
+        assert telemetry._seconds("aa:bb:cc") is None
+        assert telemetry._elapsed("nope", "00:00:01") is None
+        assert telemetry._elapsed("00:00:01", "nope") is None
+
+    def test_empty_event_lines_are_skipped(self):
+        calls = telemetry.parse_calls(
+            '<CallHistoryFile><CallHistory date="1/1/2026" time="00:00:00">'
+            "<Event time=\"00:00:00\"><e0></e0><e1>From PH(100)</e1></Event>"
+            "</CallHistory></CallHistoryFile>"
+        )
+        assert len(calls[0].events) == 1
+        assert calls[0].direction == "outbound"
+
+    def test_the_peer_falls_back_to_the_destination(self):
+        # An outbound call names the far end in the "To" line, not the "From".
+        calls = telemetry.parse_calls(
+            '<CallHistoryFile><CallHistory date="1/1/2026" time="00:00:00">'
+            '<Event time="00:00:00"><e0>From PH()</e0><e1>To SP1(+15550000001)</e1></Event>'
+            "</CallHistory></CallHistoryFile>"
+        )
+        assert calls[0].peer == "+15550000001"
+        assert calls[0].to_terminal == "SP1"
+
+    def test_a_call_with_no_events_at_all(self):
+        calls = telemetry.parse_calls(
+            '<CallHistoryFile><CallHistory date="1/1/2026" time="00:00:00">'
+            "</CallHistory></CallHistoryFile>"
+        )
+        assert calls[0].direction == "unknown"
+        assert calls[0].ring_s is None

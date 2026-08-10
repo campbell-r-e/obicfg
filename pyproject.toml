@@ -31,7 +31,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7"]
+dev = ["pytest>=7", "pytest-cov>=4"]
 # Only needed to read TOML profiles on Python older than 3.11.
 toml = ["tomli>=1.1; python_version < '3.11'"]
 
@@ -48,3 +48,7 @@ where = ["src"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src", "tests"]
+# The gate is 100%. This tool writes to a telephone and reports success or
+# failure on the strength of a read-back; an untested branch here is a branch
+# that could report a change that never happened.
+addopts = "--cov=obicfg --cov-report=term-missing --cov-fail-under=100"

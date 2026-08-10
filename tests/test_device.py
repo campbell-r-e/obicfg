@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import pytest
-from conftest import FakeClient
+from conftest import FakeClient, fixture, make_device
 
 from obicfg.device import Device, count_redacted, diff_snapshots
-from obicfg.errors import GuardError, ResolutionError, VerificationError
+from obicfg.errors import (
+    GuardError,
+    ResolutionError,
+    TransportError,
+    VerificationError,
+)
 from obicfg.guard import Guard
 
 
@@ -29,7 +34,7 @@ def test_status_pages_are_excluded_from_config_pages():
 
 def test_parameter_resolution_and_errors(device):
     assert device.parameter("EXAMPLE_SVC_.Enable").hash == "aaaa0001"
-    with pytest.raises(ResolutionError, match="no page matches"):
+    with pytest.raises(ResolutionError, match="no page named"):
         device.parameter("NOPE_.Enable")
     with pytest.raises(ResolutionError, match="Did you mean: ProxyServerPort"):
         device.parameter("EXAMPLE_SVC_.ProxyServerPor")
@@ -165,3 +170,76 @@ def test_setup_wizard_is_excluded_as_a_duplicate_view():
     device = Device(client, Guard(enabled=False))
     assert "SetupWizard" in device.page_names()
     assert "SetupWizard" not in device.config_pages()
+
+
+class TestDiscoveryEdges:
+    def test_an_empty_menu_is_reported_as_a_wrong_target(self):
+        client = FakeClient()
+        client.menu = "<html>a login page, not a menu</html>"
+        device = Device(client, Guard(enabled=False))
+        with pytest.raises(Exception, match="not an OBi admin interface"):
+            device.page_names()
+
+    def test_the_label_of_an_unlisted_page_is_its_name(self, device):
+        assert device.label("DM_S_") == "DM_S_"
+
+    def test_a_page_absent_from_the_menu_is_still_fetched(self):
+        # DM_S_ and callhistory.xml are served on request but appear in no
+        # menu entry, so "not listed" must not mean "does not exist".
+        client = FakeClient()
+        client.pages["DM_S_"] = fixture("EXAMPLE_SVC_.xml")
+        device = Device(client, Guard(enabled=False))
+        assert "DM_S_" not in device.page_names()
+        assert device.page("DM_S_").get("Enable") is not None
+
+    def test_identity_needs_a_page_that_reports_the_model(self):
+        client = FakeClient(pages={"X": fixture("EXAMPLE_SVC_.xml")})
+        client.menu = (
+            """<a href="#" onclick="e('X.xml')" class="cmenu">X</a>"""
+        )
+        device = Device(client, Guard(enabled=False))
+        with pytest.raises(ResolutionError, match="no page on this device reports"):
+            device.identity()
+
+    def test_the_query_transport_rejects_a_value_at_planning_time(self):
+        from obicfg.client import Transport
+        from obicfg.errors import ValidationError
+
+        device = make_device()
+        device.client.transport = Transport.QUERY
+        # Caught in plan(), before anything is sent -- a dry run must fail too.
+        with pytest.raises(ValidationError, match="space"):
+            device.plan([("sp2.CallerIDName", "two words")])
+
+    def test_wait_for_a_reboot_that_never_completes(self, monkeypatch):
+        device = make_device()
+        monkeypatch.setattr(cli_time := __import__("time"), "sleep", lambda _s: None)
+        original_fetch = device.client.fetch
+
+        def always_down(path):
+            if path == "DI_S_.xml":
+                raise TransportError("still rebooting")
+            return original_fetch(path)
+
+        device.client.fetch = always_down
+        assert device.reboot(wait=True, timeout=0.2) is False
+        assert cli_time is not None
+
+    def test_wait_for_a_reboot_that_completes(self, monkeypatch):
+        device = make_device()
+        monkeypatch.setattr(__import__("time"), "sleep", lambda _s: None)
+        assert device.reboot(wait=True) is True
+
+    def test_a_show_prefixed_name_is_not_treated_as_a_secret(self):
+        from obicfg.device import _is_secret
+        from obicfg.model import Parameter
+
+        def param(name):
+            return Parameter(
+                page="P", obj="O", name=name, hash="0", widget="input",
+                default="", current="x",
+            )
+
+        assert _is_secret(param("AuthPassword")) is True
+        # A checkbox called ShowAccessPointPassword is not a password.
+        assert _is_secret(param("ShowAccessPointPassword")) is False

@@ -396,7 +396,16 @@ def redact_number(number: str | None) -> str | None:
 
 
 def redact(telemetry: Telemetry) -> Telemetry:
-    """Mask caller numbers in place and return the same object."""
+    """Mask everything identifying, in place, and return the same object.
+
+    Numbers are the obvious part, but a telemetry reading also carries the
+    unit's serial and MAC. "Sharing-safe" has to mean both, or someone pastes
+    a device fingerprint into a public issue while believing it was redacted.
+    """
+    if telemetry.device.serial:
+        telemetry.device.serial = "<redacted>"
+    if telemetry.device.mac:
+        telemetry.device.mac = "<redacted>"
     telemetry.port.last_caller = redact_number(telemetry.port.last_caller)
     for call in telemetry.calls:
         call.peer = redact_number(call.peer)

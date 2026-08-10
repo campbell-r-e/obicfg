@@ -204,3 +204,65 @@ def test_unreachable_host_reports_the_host():
     with pytest.raises(Exception) as excinfo:
         client.fetch("DI_S_.xml")
     assert "127.0.0.1" in str(excinfo.value)
+
+
+class _Broken(_Recorder):
+    """A server that answers everything with 500, to exercise error mapping."""
+
+    def _serve(self):
+        self.send_response(500)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = _serve
+    do_POST = _serve
+
+
+@pytest.fixture
+def broken_server():
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Broken)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    yield httpd
+    httpd.shutdown()
+    httpd.server_close()
+
+
+def test_a_server_error_is_reported_with_the_status(broken_server):
+    from obicfg.errors import TransportError
+
+    host, port = broken_server.server_address[:2]
+    client = Client(host=host, port=port)
+    with pytest.raises(TransportError, match="HTTP 500"):
+        client.fetch("DI_S_.xml")
+
+
+def test_a_socket_level_failure_is_a_transport_error(monkeypatch):
+    from obicfg.errors import TransportError
+
+    client = Client(host="127.0.0.1", port=9)
+
+    def boom(*args, **kwargs):
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(client._opener, "open", boom)
+    with pytest.raises(TransportError, match="connection reset"):
+        client.fetch("DI_S_.xml")
+
+
+def test_reboot_requests_the_endpoint(server):
+    httpd, received = server
+    _client(httpd).reboot()
+    assert received[-1]["path"] == "/rebootgetconfig.htm"
+
+
+def test_reboot_tolerates_the_connection_dropping(monkeypatch):
+    # The unit routinely dies mid-reply as it goes down. That is a successful
+    # reboot, not a failure, and must not raise.
+    client = Client(host="127.0.0.1", port=9)
+
+    def boom(*args, **kwargs):
+        raise OSError("connection reset by peer")
+
+    monkeypatch.setattr(client._opener, "open", boom)
+    client.reboot()

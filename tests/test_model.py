@@ -101,3 +101,60 @@ def test_parse_menu_keeps_order_and_dedupes():
         ("EXAMPLE_SYS_.xml", "System Status"),
         ("EXAMPLE_SVC_.xml", "Example Service"),
     ]
+
+
+class TestParsingEdges:
+    def test_integer_below_the_minimum(self, service):
+        with pytest.raises(ValidationError, match="below minimum"):
+            service.get("ProxyServerPort").coerce(-1)
+
+    def test_a_parameter_with_no_syntax_block_is_a_plain_string(self):
+        page = parse_page(
+            "X",
+            '<model><object name="O"><parameter name="P">'
+            '<value hash="1" type="input" default=""/></parameter></object></model>',
+        )
+        assert page.get("P").syntax.kind == "string"
+        assert page.get("P").coerce("anything") == "anything"
+
+    def test_an_empty_syntax_block_falls_back_to_string(self):
+        page = parse_page(
+            "X",
+            '<model><object name="O"><parameter name="P"><syntax></syntax>'
+            '<value hash="1" type="input" default=""/></parameter></object></model>',
+        )
+        assert page.get("P").syntax.kind == "string"
+
+    def test_non_numeric_range_attributes_are_ignored(self):
+        page = parse_page(
+            "X",
+            '<model><object name="O"><parameter name="P"><syntax><unsignedInt>'
+            '<range minInclusive="lots" maxInclusive="more"/></unsignedInt></syntax>'
+            '<value hash="1" type="input" default="0"/></parameter></object></model>',
+        )
+        assert page.get("P").syntax.min_inclusive is None
+        assert page.get("P").coerce(999) == "999"
+
+    def test_the_xml_suffix_is_accepted_on_the_page_name(self):
+        assert parse_page("EXAMPLE_SVC_.xml", fixture("EXAMPLE_SVC_.xml")).name == "EXAMPLE_SVC_"
+
+    def test_display_only_rows_without_a_hash_are_skipped(self):
+        page = parse_page(
+            "X",
+            '<model><object name="O">'
+            '<parameter name="Label"><value type="input" default=""/></parameter>'
+            '<parameter name="Real"><value hash="1" type="input" default=""/></parameter>'
+            "</object></model>",
+        )
+        assert [p.name for p in page.parameters] == ["Real"]
+
+    def test_parse_objects_skips_rows_with_no_value_element(self):
+        from obicfg.model import parse_objects
+
+        objects = parse_objects(
+            '<model><object name="O">'
+            "<parameter name=\"NoValue\"><description>x</description></parameter>"
+            '<parameter name="Has"><value hash="1" default="d"/></parameter>'
+            "</object></model>"
+        )
+        assert objects == [("O", {"Has": "d"})]

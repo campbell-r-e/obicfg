@@ -11,7 +11,7 @@ from pathlib import Path
 from . import __version__, config as config_mod, telemetry
 from .client import Client, Transport
 from .device import Device, count_redacted, diff_snapshots
-from .errors import GuardError, ObiError, VerificationError
+from .errors import GuardError, ObiError, UsageError, VerificationError
 from .guard import Guard
 from .model import Page
 from .naming import aliases_for
@@ -61,7 +61,11 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
     if assume_yes:
         return True
     if not sys.stdin.isatty():
-        raise ObiError(f"{prompt} (refusing to guess on a non-interactive run; pass --yes)")
+        raise ObiError(
+            f"{prompt} -- refusing to assume an answer on a non-interactive "
+            "run. Get the human's approval for this specific action, then "
+            "re-run it with --yes."
+        )
     try:
         return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
@@ -161,7 +165,14 @@ def cmd_show(args: argparse.Namespace) -> int:
                             "default": p.default,
                             "is_default": p.is_default,
                             "writable": p.writable,
+                            "type": p.syntax.kind,
                             "options": list(p.syntax.enumeration),
+                            # The device's own declared limits. Worth having in
+                            # the output: after a rejected write these are what
+                            # you check the value against.
+                            "max_length": p.syntax.max_length,
+                            "min": p.syntax.min_inclusive,
+                            "max": p.syntax.max_inclusive,
                             "description": p.description,
                         }
                         for p in page.parameters
@@ -203,7 +214,9 @@ def cmd_search(args: argparse.Namespace) -> int:
                 indent=2,
             )
         )
-        return EXIT_OK
+        # Same exit code as the text form: no match is a result, not a crash,
+        # but callers branch on it.
+        return EXIT_OK if found else EXIT_ERROR
     if not found:
         _out(f"nothing matches {args.pattern!r}")
         return EXIT_ERROR
@@ -239,43 +252,91 @@ def _print_plan(changes) -> None:
             _out(f"  ~ {change.path}: {change.old!r} -> {change.new!r}")
 
 
+def _changes_json(changes, *, dry_run: bool = False, verified: bool = True) -> dict:
+    """Machine-readable result of a write, for scripts and agents.
+
+    Reports what was planned, what was sent, and — separately — what the
+    device confirmed. The distinction matters: `applied` only means the
+    request went out, and on an OBi that says nothing about whether it took.
+    """
+    return {
+        "dry_run": dry_run,
+        "verified": verified,
+        "plan": [
+            {"path": c.path, "old": c.old, "new": c.new, "noop": c.noop}
+            for c in changes
+        ],
+        "applied": [
+            {
+                "path": c.path,
+                "value": c.new,
+                "verified": c.verified,
+                "observed": c.observed,
+            }
+            for c in changes
+            if c.applied
+        ],
+        "failures": [
+            {"path": c.path, "wanted": c.new, "observed": c.observed}
+            for c in changes
+            if c.applied and not c.verified
+        ],
+    }
+
+
 def cmd_set(args: argparse.Namespace) -> int:
     device = _device(args)
     assignments = []
     for item in args.assignments:
         if "=" not in item:
-            raise ObiError(f"{item!r} is not a path=value pair")
+            raise UsageError(
+                f"{item!r} is not a path=value pair -- expected "
+                "<page>.<parameter>=<value>, e.g. sp2.URI=200"
+            )
         path, _, value = item.partition("=")
         assignments.append((path.strip(), _read_value(value)))
 
     changes = device.plan(assignments)
     pending = [c for c in changes if not c.noop]
-    _out("plan:")
-    _print_plan(changes)
-    if not pending:
-        _out("nothing to do")
+    if args.dry_run or not pending:
+        if args.json:
+            _out(json.dumps(_changes_json(changes, dry_run=True), indent=2))
+        else:
+            _out("plan:")
+            _print_plan(changes)
+            _out(
+                "nothing to do"
+                if not pending
+                else f"dry run: {len(pending)} change(s) not sent"
+            )
         return EXIT_OK
-    if args.dry_run:
-        _out(f"dry run: {len(pending)} change(s) not sent")
-        return EXIT_OK
+    if not args.json:
+        _out("plan:")
+        _print_plan(changes)
 
     device.apply(changes, verify=not args.no_verify)
-    _out()
-    for change in pending:
-        if args.no_verify:
-            _out(f"  sent {change.path}")
-        elif change.verified:
-            _out(f"  ok   {change.path} = {change.new!r}")
-        else:
-            _out(f"  FAIL {change.path}: device reports {change.observed!r}")
-    failures = device.verify_failures(changes)
-    if failures and not args.no_verify:
+    failed = bool(device.verify_failures(changes)) and not args.no_verify
+
+    if args.json:
+        _out(json.dumps(_changes_json(changes, verified=not args.no_verify), indent=2))
+    else:
         _out()
-        _out(
-            "the device returned HTTP 200 but did not apply the writes above. "
-            "That is normal OBi behaviour for a rejected value -- check the "
-            "syntax, or try --transport query."
-        )
+        for change in pending:
+            if args.no_verify:
+                _out(f"  sent {change.path}")
+            elif change.verified:
+                _out(f"  ok   {change.path} = {change.new!r}")
+            else:
+                _out(f"  FAIL {change.path}: device reports {change.observed!r}")
+        if failed:
+            _out()
+            _out(
+                "the device returned HTTP 200 but did not apply the writes above. "
+                "That is normal OBi behaviour for a rejected value -- check the "
+                "syntax, or try --transport query."
+            )
+    if failed:
+        # Do not reboot on top of a failed write; leave the device as found.
         return EXIT_VERIFY
     if args.reboot:
         _out("rebooting...")
@@ -286,25 +347,52 @@ def cmd_set(args: argparse.Namespace) -> int:
 
 def cmd_unset(args: argparse.Namespace) -> int:
     device = _device(args)
+    # A reset discards whatever is there now, so it gets the same dry run a
+    # write gets -- otherwise "put it back to default" is the one destructive
+    # operation with no way to preview it.
+    planned = device.plan_reset(args.paths)
+    if args.dry_run:
+        if args.json:
+            _out(json.dumps(_changes_json(planned, dry_run=True), indent=2))
+        else:
+            _out("plan:")
+            _print_plan(planned)
+            _out(f"dry run: {len([c for c in planned if not c.noop])} reset(s) not sent")
+        return EXIT_OK
+    if not args.json:
+        _out("plan:")
+        _print_plan(planned)
     if not _confirm(
         f"restore {len(args.paths)} parameter(s) to factory default?", args.yes
     ):
         _out("aborted")
         return EXIT_OK
     changes = device.reset_to_default(args.paths)
-    for change in changes:
-        if change.noop:
-            _out(f"  = {change.path} was already at its default")
-        elif change.verified:
-            _out(f"  ok   {change.path} -> {change.new!r}")
-        else:
-            _out(f"  FAIL {change.path}: device reports {change.observed!r}")
+    if args.json:
+        _out(json.dumps(_changes_json(changes), indent=2))
+    else:
+        for change in changes:
+            if change.noop:
+                _out(f"  = {change.path} was already at its default")
+            elif change.verified:
+                _out(f"  ok   {change.path} -> {change.new!r}")
+            else:
+                _out(f"  FAIL {change.path}: device reports {change.observed!r}")
     return EXIT_VERIFY if device.verify_failures(changes) else EXIT_OK
 
 
 def cmd_dump(args: argparse.Namespace) -> int:
     device = _device(args)
     directory = Path(args.directory)
+    # A backup that overwrites the previous backup is not a backup. Two runs
+    # on the same day would otherwise put post-change state on top of the only
+    # restore point, silently.
+    if (directory / "snapshot.json").exists() and not args.force:
+        raise ObiError(
+            f"{directory / 'snapshot.json'} already exists -- refusing to "
+            "overwrite an existing restore point. Choose another directory, "
+            "or pass --force if you meant to replace it."
+        )
     directory.mkdir(parents=True, exist_ok=True)
 
     identity = device.identity()
@@ -509,21 +597,20 @@ def _print_telemetry(reading) -> None:
         _out()
 
     port = reading.port
-    _out(
-        "phone port: "
-        + ", ".join(
-            part
-            for part in (
-                port.state,
-                None if port.loop_current_ma is None else f"loop {port.loop_current_ma:g} mA",
-                None if port.vbat_v is None else f"VBAT {port.vbat_v:g} V",
-                None if port.tipring_v is None else f"tip-ring {port.tipring_v:g} V",
-                f"last caller {port.last_caller}" if port.last_caller else None,
-            )
-            if part
+    details = ", ".join(
+        part
+        for part in (
+            port.state,
+            None if port.loop_current_ma is None else f"loop {port.loop_current_ma:g} mA",
+            None if port.vbat_v is None else f"VBAT {port.vbat_v:g} V",
+            None if port.tipring_v is None else f"tip-ring {port.tipring_v:g} V",
+            f"last caller {port.last_caller}" if port.last_caller else None,
         )
-        or "no data"
+        if part
     )
+    # Parenthesised deliberately: "phone port: " + details is always truthy,
+    # so an `or` on the whole expression would never reach the fallback.
+    _out("phone port: " + (details or "no data"))
 
     if reading.calls:
         _out()
@@ -721,15 +808,17 @@ def build_parser() -> argparse.ArgumentParser:
     get = add("get", cmd_get, "print the current value of one or more parameters")
     get.add_argument("paths", nargs="+", metavar="PATH")
 
-    set_ = add("set", cmd_set, "write parameters, then read them back to confirm", json_flag=False)
+    set_ = add("set", cmd_set, "write parameters, then read them back to confirm")
     set_.add_argument("assignments", nargs="+", metavar="PATH=VALUE",
                       help="value may be @filename to read it from a file")
     set_.add_argument("-n", "--dry-run", action="store_true", help="show the plan only")
     set_.add_argument("--no-verify", action="store_true", help="skip the read-back (not advised)")
     set_.add_argument("--reboot", action="store_true", help="reboot afterwards and wait")
 
-    unset = add("unset", cmd_unset, "restore parameters to their factory default", json_flag=False)
+    unset = add("unset", cmd_unset, "restore parameters to their factory default")
     unset.add_argument("paths", nargs="+", metavar="PATH")
+    unset.add_argument("-n", "--dry-run", action="store_true",
+                       help="show what would be reset, and send nothing")
 
     dump = add("dump", cmd_dump, "back up the whole configuration to a directory", json_flag=False)
     dump.add_argument("directory")
@@ -737,13 +826,15 @@ def build_parser() -> argparse.ArgumentParser:
     dump.add_argument("--all", action="store_true",
                       help="include read-only readouts (noisy: some change every second)")
     dump.add_argument("--redact", action="store_true", help="blank passwords, MAC and serial")
+    dump.add_argument("--force", action="store_true",
+                      help="overwrite an existing backup in this directory")
     dump.add_argument("--no-raw", dest="raw", action="store_false", help="snapshot.json only")
 
     diff = add("diff", cmd_diff, "compare a snapshot against the device or another snapshot")
     diff.add_argument("snapshot", help="snapshot.json, or the directory holding it")
     diff.add_argument("--against", help="compare against this snapshot instead of the device")
 
-    apply_ = add("apply", cmd_apply, "bring the device in line with a profile", json_flag=False)
+    apply_ = add("apply", cmd_apply, "bring the device in line with a profile")
     apply_.add_argument("profile", help="a .toml profile")
     apply_.add_argument("-n", "--dry-run", action="store_true", help="show the plan only")
     reboot_group = apply_.add_mutually_exclusive_group()
@@ -762,7 +853,7 @@ def build_parser() -> argparse.ArgumentParser:
     tel.add_argument("--no-calls", action="store_true",
                      help="skip call history (it is the largest fetch by far)")
     tel.add_argument("--redact", action="store_true",
-                     help="mask phone numbers in call history and last-caller")
+                     help="mask phone numbers, and the device serial and MAC")
     tel.add_argument("--watch", type=float, metavar="SECONDS",
                      help="repeat every SECONDS until interrupted")
 
@@ -781,6 +872,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
+    except UsageError as exc:
+        print(f"obicfg: {exc}", file=sys.stderr)
+        return EXIT_USAGE
     except GuardError as exc:
         print(f"obicfg: {exc}", file=sys.stderr)
         return EXIT_GUARD

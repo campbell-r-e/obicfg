@@ -274,12 +274,28 @@ Two more sharp edges the tool handles for you:
 | 3 | the device accepted a write and did not apply it |
 | 4 | blocked by write protection |
 
+## Documentation
+
+- **[`docs/COMMANDS.md`](docs/COMMANDS.md)** — every command, every flag, and
+  the exact shape of every `--json` output.
+- **[`skills/obicfg/`](skills/obicfg/)** — an agent skill for driving this tool
+  from Claude Code, with the safety sequencing spelled out. Install it with
+  `ln -s "$PWD/skills/obicfg" ~/.claude/skills/obicfg`.
+- **[`skills/obicfg/references/recipes.md`](skills/obicfg/references/recipes.md)**
+  — page aliases, the SP/ITSP numbering trap, call-route syntax, and worked
+  setups. Useful whether or not you use the skill.
+
 ## Development
 
 ```sh
 pip install -e '.[dev]'
 pytest
 ```
+
+Coverage is gated at **100%** and the suite fails below it. That is not
+box-ticking: this tool writes to a telephone and reports success or failure on
+the strength of a read-back, so an untested branch is a branch that could
+claim a change that never happened.
 
 The test suite runs against an in-memory fake device and a real HTTP server on
 localhost; no hardware needed. It includes a fake that answers `200` and

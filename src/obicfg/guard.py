@@ -177,6 +177,20 @@ class Guard:
 
     # -- the check --------------------------------------------------------
 
+    def check_static(self, path: str) -> None:
+        """Apply only the pattern rules, without needing the parameter.
+
+        Called before a path is resolved against the device, so that a
+        protected page reports itself as protected even when the parameter
+        name is wrong. Otherwise a typo inside a page you must not touch
+        surfaces as "no such parameter", which invites a second guess.
+        """
+        if not self.enabled:
+            return
+        reason = self.static_reason(path)
+        if reason is not None:
+            raise GuardError(f"refusing to write {path}: {reason}.")
+
     def check(self, path: str, parameter=None, siblings: Iterable = ()) -> None:
         """Raise :class:`GuardError` if this write is protected."""
         if not self.enabled:

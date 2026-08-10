@@ -86,10 +86,23 @@ class Device:
         return page
 
     def page(self, name: str, *, refresh: bool = False) -> Page:
-        """Fetch and parse a page, by alias or raw name."""
+        """Fetch and parse a page, by alias or raw name.
+
+        A name the menu does not list is still tried against the device. The
+        menu is not a complete index: ``DM_S_`` (auto-provisioning) and
+        ``callhistory.xml`` are both served on request while appearing in no
+        menu entry, so refusing to fetch what is not listed would make some
+        real pages unreachable -- including one this tool protects.
+        """
         resolved = resolve_page(name, self.page_names()) or name
         if refresh or resolved not in self._pages:
-            raw = self.client.fetch(f"{resolved}.xml")
+            try:
+                raw = self.client.fetch(f"{resolved}.xml")
+            except TransportError as exc:
+                raise ResolutionError(
+                    f"no page named {resolved!r} on this device ({exc}) -- try "
+                    "`obicfg pages`, or `obicfg search` to find a setting by name"
+                ) from None
             self._pages[resolved] = parse_page(resolved, raw)
         return self._pages[resolved]
 
@@ -111,13 +124,7 @@ class Device:
     def parameter(self, path: str, *, refresh: bool = False) -> Parameter:
         """Resolve ``sp2.X_InboundCallRoute`` (or the raw form) to a parameter."""
         page_name, param_name = split_path(path)
-        resolved = resolve_page(page_name, self.page_names())
-        if resolved is None:
-            raise ResolutionError(
-                f"no page matches {page_name!r} -- try `obicfg pages`, or "
-                f"`obicfg search {param_name}` to find it by parameter name"
-            )
-        page = self.page(resolved, refresh=refresh)
+        page = self.page(page_name, refresh=refresh)
         parameter = page.get(param_name)
         if parameter is None:
             near = [
@@ -222,6 +229,11 @@ class Device:
 
     # -- writes -----------------------------------------------------------
 
+    def _guard_check_early(self, path: str) -> None:
+        """Refuse a protected page before we even look it up on the device."""
+        page_name, param_name = split_path(path)
+        self.guard.check_static(f"{page_name}.{param_name}")
+
     def _guard_check(self, parameter: Parameter) -> None:
         """Run the guard with enough context to spot provisioned credentials.
 
@@ -240,6 +252,7 @@ class Device:
         """
         changes: list[Change] = []
         for path, value in assignments:
+            self._guard_check_early(path)
             parameter = self.parameter(path)
             self._guard_check(parameter)
             new = parameter.coerce(value)
@@ -293,6 +306,26 @@ class Device:
                 f"them:\n{detail}"
             )
 
+    def plan_reset(self, paths: Iterable[str]) -> list[Change]:
+        """What a reset would do, without doing it.
+
+        A reset is destructive in the same way a write is -- it discards
+        whatever is there now -- so it needs the same dry run a write gets.
+        """
+        changes: list[Change] = []
+        for path in paths:
+            self._guard_check_early(path)
+            parameter = self.parameter(path)
+            self._guard_check(parameter)
+            changes.append(
+                Change(
+                    parameter=parameter,
+                    old=parameter.value,
+                    new=parameter.default,
+                )
+            )
+        return changes
+
     def reset_to_default(self, paths: Iterable[str]) -> list[Change]:
         """Restore parameters to their factory values.
 
@@ -302,6 +335,7 @@ class Device:
         """
         changes: list[Change] = []
         for path in paths:
+            self._guard_check_early(path)
             parameter = self.parameter(path)
             self._guard_check(parameter)
             if parameter.is_default:

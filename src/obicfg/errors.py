@@ -16,6 +16,10 @@ class AuthError(TransportError):
     """The device rejected the admin credentials."""
 
 
+class UsageError(ObiError):
+    """The command line itself was malformed, as opposed to the request failing."""
+
+
 class ValidationError(ObiError):
     """A value failed the device's own declared syntax, or cannot be encoded."""
 
