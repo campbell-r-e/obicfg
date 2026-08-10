@@ -54,9 +54,12 @@ re-issued. Treat every write as production.
    The guard can also be weakened from the config file (`[guard] allow`,
    `detect_provisioned = false`), so it is not an unconditional safety net.
    Do not assume it is armed on a machine you have not checked.
-5. **Never report success without evidence.** A change is done when the JSON
-   shows `"verified": true` for it and `failures` is empty. Quote that, not
-   your expectation.
+5. **Never report success without evidence.** A change is done when
+   `dry_run` is `false`, `applied[]` is **non-empty**, every entry in it has
+   `"verified": true`, and `failures` is empty. Quote that, not your
+   expectation. Check `applied[]` specifically: a dry run also reports an
+   empty `failures` list, so "no failures" alone is satisfied by having done
+   nothing at all.
 6. **Never put the password in the command line, and never print it.** argv is
    visible in `ps` to every user on the machine. Use `OBI_PASSWORD_FILE`,
    `OBI_PASSWORD`, or the config file. When triaging an authentication
@@ -95,6 +98,12 @@ Pass `--json` on every command that supports it and parse stdout:
 |---|---|
 | `pages` `show` `search` `get` `set` `unset` `apply` `diff` `status` `telemetry` `probe` | `dump` `reboot` |
 
+Errors are JSON too, whenever `--json` was requested: `{"error": ..., "kind":
+..., "exit": N}` on stdout, with the prose on stderr. `kind` is one of
+`unreachable`, `auth`, `not_found`, `invalid_value`, `usage`, `guard`,
+`not_applied`, `error` — use it to tell apart the several situations that all
+exit 1.
+
 Connection settings come from flags, then environment, then
 `~/.config/obicfg/config.toml`. Flags work before or after the subcommand.
 
@@ -127,8 +136,18 @@ obicfg pages --json                     # what this model exposes
 ```
 
 Reads are safe and need no confirmation. Prefer `search` over guessing: it
-matches parameter names *and* descriptions, so "the setting that controls
-where inbound calls go" is findable.
+matches parameter names *and* descriptions. The pattern is a **regular
+expression**, so search for a keyword — `search inbound` — not a sentence. A
+plain-English phrase matches nothing, and no match is an empty array with
+exit 1.
+
+`get --json` keys its result by the **raw** path, not the alias you asked
+with: ask for `itsp.b.sip.ProxyServer`, read back
+`VS_1_VP_2_SIP_.ProxyServer`.
+
+`status` reports each service's *configuration* — enabled, ITSP letter,
+inbound route. It does **not** report registration state; that is
+`telemetry`, under `device.services[].status`.
 
 ## Workflow B — change a setting
 
@@ -136,8 +155,9 @@ where inbound calls go" is findable.
    value. Report what it is now.
 2. **Back up** (once per session):
    `obicfg dump ./obi-backup-$(date +%Y-%m-%dT%H%M%S)`.
-3. **Dry run**: `obicfg set <path>=<value> --dry-run --json`. Every entry has
-   `noop: true` (already correct) or `old`/`new`.
+3. **Dry run**: `obicfg set <path>=<value> --dry-run --json`. Every entry
+   carries `old`, `new` *and* `noop` — always all three, so test `noop`
+   explicitly rather than checking whether `old`/`new` are present.
 4. **Show the user** the plan and what it will do in their terms — "this stops
    inbound calls ringing the handset and sends them to the PBX instead" — and
    **wait for approval**.
@@ -261,7 +281,7 @@ Map the complaint to the evidence:
 | "calls don't come in" | service `status`, and the `X_InboundCallRoute` of the service they arrive on |
 | "audio breaks up / robotic" | `quality[].loss_percent`, `overruns`, `underruns` per service |
 | "no dial tone", "phone dead" | `port.state`, `loop_current_ma`, `vbat_v` |
-| "the call dropped" | `calls[]` — `answered`, `ring_s`, `talk_s`, and the raw `events` |
+| "the call dropped" | `calls[]` — `connected` (or its alias `answered`), `ring_s`, `talk_s`, and the raw `events`. Check `calls_included` first: it is `false` if `--no-calls` was used, and then an empty list means nothing at all |
 | "did it reboot?" | `device.uptime_s` and `device.reboots` |
 
 ## When a write silently fails (exit 3)
@@ -287,6 +307,12 @@ Do **not** retry the identical command. In order:
 - **`ModelName`'s factory default is `OBi100`** on every model in the family.
   Read the effective value (which `obicfg` already does), never the default.
 - **A `${...}` value** is a provisioning macro, not a corrupted setting.
+- **`show --changed` can list a parameter equal to its default.** The filter is
+  the device's "has been written" flag, not a value comparison.
+- **`obitalk_status` churns** between "Backing Off" and "Acquiring Service".
+  The OBiTALK cloud is gone; the device keeps trying anyway. Not a fault.
+- **`loss_percent: null`** means no RTP has flowed on that service, not zero
+  loss.
 - **Read-only parameters** are absent from snapshots on purpose. That is not a
   gap in the backup; they are readouts, not settings.
 
@@ -299,6 +325,12 @@ Do **not** retry the identical command. In order:
 - Never write to a service whose credentials `obicfg` reports as provisioned.
 - Never suggest OBiTALK as a solution to anything; it was retired in Nov 2024.
 - Never commit a dump, a snapshot, or call history to a repository.
+- Never run `probe` against the parameter you are troubleshooting. Its default
+  scratch parameter is SP4's caller ID name, so if that *is* the parameter in
+  question, nominate a different one with `--scratch`.
+- Remember `dump` writes files to disk. If you are operating read-only, say so
+  rather than skipping the backup silently — a write without a restore point
+  is the thing rule 1 exists to prevent.
 
 ## Reference
 

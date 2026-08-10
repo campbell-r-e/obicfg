@@ -450,7 +450,9 @@ class TestDiff:
         run("set", "sp2.CallerIDName=Lobby")
         capsys.readouterr()
         assert run("diff", str(target), "--json") == 1
-        assert out_json(capsys)[0]["after"] == "Lobby"
+        data = out_json(capsys)
+        assert data["differences"][0]["after"] == "Lobby"
+        assert data["redacted_skipped"] == 0
 
     def test_two_snapshots_against_each_other(self, device, capsys, tmp_path):
         first, second = tmp_path / "a", tmp_path / "b"
@@ -734,3 +736,181 @@ def test_show_json_exposes_the_declared_limits(device, capsys):
     assert (fields["ProxyServerPort"]["min"], fields["ProxyServerPort"]["max"]) == (0, 65535)
     assert fields["CallerIDName"]["max_length"] == 16
     assert fields["ProxyServerTransport"]["options"] == ["UDP", "TCP", "TLS"]
+
+
+class TestSecondAuditFixes:
+    """Regressions for defects found by an agent following the skill for real.
+
+    The first of these is the important one: a dry run used to report
+    `verified: true` with an empty `failures` list, which is exactly the
+    success test the skill tells an agent to apply. A preview satisfied it.
+    """
+
+    def test_a_dry_run_never_claims_to_have_verified_anything(self, device, capsys):
+        assert run("set", "sp2.Enable=true", "--dry-run", "--json") == 0
+        data = out_json(capsys)
+        assert data["dry_run"] is True
+        assert data["verified"] is False
+        assert data["applied"] == []
+
+    def test_a_real_write_does_claim_it(self, device, capsys):
+        assert run("set", "sp2.Enable=true", "--json") == 0
+        data = out_json(capsys)
+        assert (data["dry_run"], data["verified"]) == (False, True)
+        assert data["applied"][0]["verified"] is True
+
+    def test_an_all_noop_run_is_not_labelled_a_dry_run(self, device, capsys):
+        # Nothing was sent, but not because a preview was asked for.
+        assert run("set", "sp2.Enable=false", "--json") == 0
+        assert out_json(capsys)["dry_run"] is False
+
+    def test_apply_json_is_actually_json(self, device, capsys, tmp_path):
+        path = tmp_path / "p.toml"
+        path.write_text('name = "T"\n[settings]\n"sp2.CallerIDName" = "Lobby"\n')
+        assert run("apply", str(path), "--dry-run", "--json") == 0
+        data = out_json(capsys)
+        assert data["profile"] == "T"
+        assert data["dry_run"] is True
+        assert data["plan"][0]["new"] == "Lobby"
+
+        assert run("--yes", "apply", str(path), "--json") == 0
+        data = out_json(capsys)
+        assert data["applied"][0]["verified"] is True
+
+    def test_apply_json_when_the_device_already_matches(self, device, capsys, tmp_path):
+        path = tmp_path / "p.toml"
+        path.write_text('name = "T"\n[settings]\n"sp2.Enable" = false\n')
+        assert run("apply", str(path), "--json") == 0
+        assert out_json(capsys)["plan"][0]["noop"] is True
+
+    def test_apply_json_includes_planned_resets(self, device, capsys, tmp_path):
+        path = tmp_path / "p.toml"
+        path.write_text('name = "T"\n[reset]\nparameters = ["sp2.Enable"]\n')
+        assert run("apply", str(path), "--dry-run", "--json") == 0
+        assert out_json(capsys)["plan"][0]["path"] == "VS_1_VP_1_L_2_.Enable"
+
+    def test_apply_text_shows_what_a_reset_would_restore(self, device, capsys, tmp_path):
+        path = tmp_path / "p.toml"
+        path.write_text('name = "T"\n[reset]\nparameters = ["sp2.Enable"]\n')
+        assert run("apply", str(path), "--dry-run") == 0
+        assert "factory default 'true'" in out(capsys)
+
+    @pytest.mark.parametrize(
+        "argv,kind,code",
+        [
+            (["get", "sp2.NoSuchParameter", "--json"], "not_found", 1),
+            (["set", "sp2.ProxyServerPort=99999", "--json"], "invalid_value", 1),
+            (["set", "notapair", "--json"], "usage", 2),
+        ],
+    )
+    def test_errors_are_parseable_when_json_was_requested(
+        self, device, capsys, argv, kind, code
+    ):
+        # Otherwise json.loads(stdout) raises on empty input for every error.
+        assert run(*argv) == code
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["kind"] == kind
+        assert payload["exit"] == code
+        assert payload["error"]
+        assert "obicfg:" in captured.err  # humans still get the prose
+
+    def test_the_guard_error_is_parseable_too(self, guarded, capsys):
+        assert run("set", "sp2.AuthUserName=x", "--json") == 4
+        assert json.loads(capsys.readouterr().out)["kind"] == "guard"
+
+    def test_an_unreachable_device_is_parseable(self, monkeypatch, capsys):
+        from obicfg.errors import TransportError
+
+        def boom(args):
+            raise TransportError("cannot reach 192.0.2.1")
+
+        monkeypatch.setattr(cli, "_device", boom)
+        assert run("status", "--json") == 1
+        assert json.loads(capsys.readouterr().out)["kind"] == "unreachable"
+
+    def test_bad_credentials_are_parseable(self, monkeypatch, capsys):
+        from obicfg.errors import AuthError
+
+        def boom(args):
+            raise AuthError("rejected the credentials")
+
+        monkeypatch.setattr(cli, "_device", boom)
+        assert run("status", "--json") == 1
+        assert json.loads(capsys.readouterr().out)["kind"] == "auth"
+
+    def test_a_verification_error_is_parseable(self, monkeypatch, capsys):
+        def boom(args):
+            raise cli.VerificationError("did not apply")
+
+        monkeypatch.setattr(cli, "_device", boom)
+        assert run("status", "--json") == 3
+        assert json.loads(capsys.readouterr().out)["kind"] == "not_applied"
+
+    def test_errors_stay_prose_only_without_json(self, device, capsys):
+        assert run("get", "sp2.NoSuchParameter") == 1
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert "obicfg:" in captured.err
+
+    def test_status_can_redact_the_fingerprint(self, device, capsys):
+        assert run("status", "--redact", "--json") == 0
+        identity = out_json(capsys)["identity"]
+        assert identity["SerialNumber"] == "<redacted>"
+        assert identity["ModelName"] == "OBi200"
+
+    def test_status_without_redact_shows_it(self, device, capsys):
+        assert run("status", "--json") == 0
+        assert out_json(capsys)["identity"]["SerialNumber"] == "0000TESTSERIAL"
+
+    def test_skipped_call_history_is_distinguishable_from_no_calls(self, device, capsys):
+        assert run("telemetry", "--no-calls", "--json") == 0
+        data = out_json(capsys)
+        assert data["calls"] == [] and data["calls_included"] is False
+
+        assert run("telemetry", "--json") == 0
+        data = out_json(capsys)
+        assert data["calls"] and data["calls_included"] is True
+
+    def test_calls_expose_answered_in_json(self, device, capsys):
+        # Workflow F tells agents to read `answered`; it has to be there.
+        assert run("telemetry", "--json") == 0
+        assert out_json(capsys)["calls"][0]["answered"] is True
+
+    def test_the_port_can_come_from_config_and_environment(self, monkeypatch):
+        import argparse
+
+        args = argparse.Namespace(
+            host="x", user=None, password=None, password_file=None, port=None,
+            scheme=None, timeout=None, transport=None, unsafe=False,
+        )
+        monkeypatch.setattr(
+            cli.config_mod, "load_config", lambda: {"device": {"port": 8080}}
+        )
+        monkeypatch.delenv("OBI_PORT", raising=False)
+        assert cli._device(args).client.port == 8080
+        monkeypatch.setenv("OBI_PORT", "9090")
+        assert cli._device(args).client.port == 9090
+
+    def test_a_nonsense_port_is_rejected_clearly(self, monkeypatch):
+        import argparse
+
+        args = argparse.Namespace(
+            host="x", user=None, password=None, password_file=None, port=None,
+            scheme=None, timeout=None, transport=None, unsafe=False,
+        )
+        monkeypatch.setattr(cli.config_mod, "load_config", dict)
+        monkeypatch.setenv("OBI_PORT", "not-a-port")
+        with pytest.raises(cli.ObiError, match="port must be a number"):
+            cli._device(args)
+
+    def test_an_empty_port_setting_means_the_default(self, monkeypatch):
+        import argparse
+
+        args = argparse.Namespace(
+            host="x", user=None, password=None, password_file=None, port=None,
+            scheme=None, timeout=None, transport=None, unsafe=False,
+        )
+        monkeypatch.setattr(cli.config_mod, "load_config", dict)
+        monkeypatch.setenv("OBI_PORT", "")
+        assert cli._device(args).client.port is None

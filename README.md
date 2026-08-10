@@ -53,6 +53,9 @@ bundled TOML parser takes over from `tomllib`, and that path is covered too.
 pip install .
 ```
 
+`python3 -m obicfg` works too, if you would rather not rely on the console
+script being on `PATH`.
+
 Or skip installing altogether. Copy the repository to whatever box is on the
 right network and run it in place:
 
@@ -119,7 +122,7 @@ trips, not twenty.
 ### Backups and drift
 
 ```sh
-obicfg dump ./before-changes            # every page: raw XML + snapshot.json
+obicfg dump ./before-changes            # config pages: raw XML + snapshot.json
 obicfg diff ./before-changes            # what has changed since, on the device
 obicfg diff ./jan --against ./feb       # or between two snapshots
 ```
@@ -173,8 +176,9 @@ WHEN                DIRECTION  PEER          PATH      ANSWERED  RING  TALK
 8/10/2026 15:55:55  inbound    +xxxxxxxxx30  SP1->SP2  yes       0s    28s
 ```
 
-Five endpoints carry all of it: device status, WAN and clock, the analogue
-port's electrical state, RTP counters per service, and call detail records.
+Four endpoints carry all of it: device status (including the WAN address and
+the device's own clock), the analogue port's electrical state, RTP counters
+per service, and call detail records.
 `--json` emits the parsed structures for a collector to store; `--watch 30`
 repeats until interrupted; `--redact` masks phone numbers, which is worth
 remembering because call history is the one part of an ATA's state that is
@@ -217,9 +221,10 @@ protected by association.
 ```console
 $ obicfg set sp1.AuthUserName=someone
 obicfg: refusing to write VS_1_VP_1_L_1_.AuthUserName: its current value
-'${DSN}_1' is a provisioning macro, so it was pushed by a provisioning server
-rather than typed; the OBiTALK provisioning cloud shut down in Nov 2024, so
-anything it issued cannot be re-issued once overwritten.
+'${DSN}_1' is a provisioning macro and not the factory default, so it was
+pushed by a provisioning server rather than typed; the OBiTALK provisioning
+cloud shut down in Nov 2024, so anything it issued cannot be re-issued once
+overwritten.
   Back up first (obicfg dump ./before), and re-run with --unsafe if you are
   certain.
 ```
@@ -275,7 +280,7 @@ Two more sharp edges the tool handles for you:
 | Code | Meaning |
 | ---- | ------- |
 | 0 | success |
-| 1 | error, or `diff` found differences |
+| 1 | error; also `diff` finding differences, or `search` matching nothing |
 | 2 | bad usage |
 | 3 | the device accepted a write and did not apply it |
 | 4 | blocked by write protection |

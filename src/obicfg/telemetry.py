@@ -4,12 +4,16 @@ Configuration is what the device *should* do; telemetry is what it is actually
 doing. Five endpoints carry effectively all of it:
 
 ===========================  =========================================
-``DI_S_.xml``                model, firmware, uptime, per-service registration
-``DI_NS_.xml``               WAN addressing and the device's own clock
+``DI_S_.xml``                model, firmware, uptime, per-service registration,
+                             WAN address and the device's own clock
 ``PI_FXS_1_Stats.xml``       the analogue line: hook state, loop current, VBAT
 ``VS_1_VP_1_L_1_Stats.xml``  RTP counters per service, including packet loss
 ``callhistory.xml``          structured call detail records
 ===========================  =========================================
+
+Four endpoints, not five: the WAN page (``DI_NS_.xml``) is not fetched,
+because everything telemetry wants from it -- the address and the clock --
+is already on the status page.
 
 ``callhistory.xml`` is worth calling out: it is **not listed in the admin
 menu**, so nothing that discovers pages by crawling the UI will ever find it.
@@ -29,14 +33,12 @@ from dataclasses import asdict, dataclass, field
 from .model import parse_objects
 
 ENDPOINT_STATUS = "DI_S_.xml"
-ENDPOINT_NETWORK = "DI_NS_.xml"
 ENDPOINT_PORT = "PI_FXS_1_Stats.xml"
 ENDPOINT_QUALITY = "VS_1_VP_1_L_1_Stats.xml"
 ENDPOINT_CALLS = "callhistory.xml"
 
 ENDPOINTS = (
     ENDPOINT_STATUS,
-    ENDPOINT_NETWORK,
     ENDPOINT_PORT,
     ENDPOINT_QUALITY,
     ENDPOINT_CALLS,
@@ -202,6 +204,10 @@ class Telemetry:
     quality: list
     calls: list
     errors: dict = field(default_factory=dict)
+    #: False when call history was deliberately skipped. Without this, an
+    #: empty `calls` list is indistinguishable from "this device has never
+    #: taken a call", and someone answers "show me recent calls" with "none".
+    calls_included: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -210,7 +216,8 @@ class Telemetry:
             "quality": [
                 dict(asdict(q), loss_percent=q.loss_percent) for q in self.quality
             ],
-            "calls": [asdict(c) for c in self.calls],
+            "calls": [dict(asdict(c), answered=c.answered) for c in self.calls],
+            "calls_included": self.calls_included,
             "errors": self.errors,
         }
 
@@ -447,5 +454,10 @@ def read(device, *, calls: int | None = 20, include_calls: bool = True) -> Telem
         else []
     )
     return Telemetry(
-        device=status, port=port, quality=quality, calls=history, errors=errors
+        device=status,
+        port=port,
+        quality=quality,
+        calls=history,
+        errors=errors,
+        calls_included=include_calls,
     )

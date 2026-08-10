@@ -14,7 +14,7 @@ someone poked the web UI -- converges instead of thrashing.
     [settings]
     "sp2.Enable"                 = true
     "sp2.X_InboundCallRoute"     = "sp1"
-    "itsp.b.sip.X_UserAgentPort" = 5061
+    "sp2.X_UserAgentPort"        = 5061
 
     [reset]
     parameters = ["sp4.CallerIDName"]

@@ -25,19 +25,24 @@ These may appear **before or after** the subcommand: `obicfg --host X status` an
 | `-u`, `--user` | `OBI_USERNAME` | `admin` | Admin username |
 | `-p`, `--password` | `OBI_PASSWORD` | `admin` | Admin password. **Prefer the alternatives** — argv is visible in `ps` |
 | `--password-file` | `OBI_PASSWORD_FILE` | — | Read the password from a file (trailing newline stripped) |
-| `--port` | — | scheme default | Admin port, if moved |
+| `--port` | `OBI_PORT` | scheme default | Admin port, if moved |
 | `--scheme` | `OBI_SCHEME` | `http` | `http` or `https` |
 | `--timeout` | `OBI_TIMEOUT` | `15.0` | Per-request timeout, seconds |
 | `--transport` | `OBI_TRANSPORT` | `paramlist` | Write encoding — see [How writes work](../README.md#how-writes-actually-work) |
 | `--unsafe` | — | off | Disable write protection. See [Write protection](../README.md#write-protection) |
 | `-y`, `--yes` | — | off | Skip **every** confirmation prompt, for every command in that invocation |
-| `--version` | — | — | Print version and exit |
 
 Precedence: flag → environment → config file → built-in default.
+
+`obicfg --version` prints the version. Unlike the flags above it must come
+*before* the subcommand — `obicfg status --version` is an error.
 
 > `-y` is not scoped to one prompt. A single `-y` disarms the confirmation on
 > `unset`, `apply`, `reboot` and `probe` alike. Pass it only for an action a
 > human has already approved.
+
+On a non-interactive run (a script, cron, CI) those same four commands refuse
+to assume an answer and exit 1 rather than defaulting to "no".
 
 ## Exit codes
 
@@ -50,7 +55,22 @@ Precedence: flag → environment → config file → built-in default.
 | `4` | Blocked by write protection |
 
 Exit `0` from a write does **not** by itself mean a setting changed. Check
-`verified` in the JSON, or the `ok`/`FAIL` lines in the text output.
+that `applied[]` is non-empty and every entry in it has `"verified": true`,
+or read the `ok`/`FAIL` lines in the text output.
+
+Exit 1 covers several distinct situations — unreachable device, bad
+credentials, unknown page or parameter, a value the device's syntax rejects,
+an unreadable snapshot, and `diff` finding differences. To tell them apart,
+pass `--json`: **every error is also emitted as JSON on stdout** when you do,
+with a `kind` field (`unreachable`, `auth`, `not_found`, `invalid_value`,
+`usage`, `guard`, `not_applied`, `error`) alongside `error` and `exit`. The
+human-readable message always goes to stderr as well.
+
+```console
+$ obicfg get sp2.NoSuchThing --json
+{"error": "page VS_1_VP_1_L_2_ (SP2 Service) has no parameter 'NoSuchThing'.",
+ "kind": "not_found", "exit": 1}
+```
 
 ## Parameter paths
 
@@ -107,7 +127,7 @@ obicfg show <PAGE> [--json] [--changed]
 
 | Flag | Meaning |
 |---|---|
-| `--changed` | Only parameters altered from their factory default |
+| `--changed` | Only parameters the device records as explicitly set (see the note below — this is not quite "differs from default") |
 
 ```console
 $ obicfg show sp2 --changed
@@ -135,7 +155,11 @@ X_InboundCallRoute  sp1     set    80fd3f53
       "default": "UDP",
       "is_default": true,
       "writable": true,
+      "type": "string",
       "options": ["UDP", "TCP", "TLS"],
+      "max_length": null,
+      "min": null,
+      "max": null,
       "description": "Transport protocol to connect to SIP server"
     }
   ]
@@ -143,7 +167,14 @@ X_InboundCallRoute  sp1     set    80fd3f53
 ```
 
 `options` is the device's own enumeration — the authoritative list of legal
-values for that parameter.
+values for that parameter. `type`, `max_length`, `min` and `max` are the rest
+of its declared syntax, and are `null` where the device declares no limit.
+These four are what to check a value against after an exit 3.
+
+`--changed` filters on the device's own "has been written" flag, not on
+whether the value differs from the default. A parameter that was explicitly
+set to the same string as its default still shows up. That is the device's
+distinction, not this tool's.
 
 ## `search`
 
@@ -153,8 +184,9 @@ Find parameters by name, path or description, across every configuration page.
 obicfg search <REGEX> [--json]
 ```
 
-Case-insensitive. Descriptions are searched too, so a setting can be found by
-what it does rather than what it is called. **Exits 1 when nothing matches**,
+The pattern is a **regular expression**, matched case-insensitively against
+each parameter's path and its description. Search for a keyword — `search
+inbound` — not a sentence; a plain-English phrase matches nothing. **Exits 1 when nothing matches**,
 in both output forms.
 
 ```console
@@ -178,7 +210,9 @@ obicfg get <PATH> [<PATH> ...] [--json]
 ```
 
 One path prints the bare value (script-friendly); several print
-`path = value` lines. JSON is always an object keyed by canonical path.
+`path = value` lines. JSON is always an object keyed by the **canonical raw
+path**, not by the alias you asked with: request `itsp.b.sip.ProxyServer` and
+the key comes back as `VS_1_VP_2_SIP_.ProxyServer`.
 
 ```console
 $ obicfg get sp2.URI
@@ -213,6 +247,8 @@ page go out in **one request**, matching what the web UI does on Submit.
 
 `<VALUE>` may be `@filename` to read the value from a file, which is how to
 pass a long `DigitMap` or `OutboundCallRoute` without the shell mangling it.
+Leading and trailing whitespace in the file is stripped, so a trailing
+newline does not become part of the value.
 The literal string `default` is rejected: the device reserves it as the
 reset-to-factory sentinel — use [`unset`](#unset).
 
@@ -238,8 +274,8 @@ plan:
 
 | Field | Meaning |
 |---|---|
-| `dry_run` | Nothing was sent |
-| `verified` | Whether a read-back was performed at all (false under `--no-verify`) |
+| `dry_run` | `--dry-run` was passed. Nothing was sent — but note the converse does not hold: a run where every change was already correct also sends nothing, with `dry_run: false`. Read `applied[]` to know whether anything reached the device |
+| `verified` | A read-back was performed. `false` under `--no-verify`, and `false` on a dry run — a preview verifies nothing |
 | `plan[].noop` | Already at the requested value; it will not be sent |
 | `applied[]` | Requests that went out — **not** proof they took effect |
 | `applied[].verified` | The device confirms the new value. This is the success signal |
@@ -273,6 +309,9 @@ Bring the device in line with a profile. Idempotent.
 ```sh
 obicfg apply <PROFILE.toml> [--json] [-n|--dry-run] [--reboot|--no-reboot]
 ```
+
+`--json` emits the same shape as [`set`](#set), plus a `profile` key naming
+the profile, with planned resets folded into `plan[]`.
 
 | Flag | Meaning |
 |---|---|
@@ -313,7 +352,9 @@ obicfg dump <DIRECTORY> [--include-status] [--all] [--redact] [--force] [--no-ra
 | `--force` | Overwrite an existing backup in this directory |
 | `--no-raw` | Write `snapshot.json` only, no per-page XML |
 
-Writes `<page>.xml` for every page plus `snapshot.json`. **Refuses to
+Writes `<page>.xml` for every *configuration* page plus `snapshot.json`.
+Status and Setup Wizard pages are skipped unless `--include-status`, and
+`--no-raw` skips the XML entirely. **Refuses to
 overwrite an existing `snapshot.json` without `--force`** — a backup that eats
 the previous backup is not a backup.
 
@@ -368,7 +409,12 @@ $ obicfg diff ./before
 ```
 
 ```json
-[{"path": "VS_1_VP_1_L_2_.CallerIDName", "before": "Old", "after": "New"}]
+{
+  "differences": [
+    {"path": "VS_1_VP_1_L_2_.CallerIDName", "before": "Old", "after": "New"}
+  ],
+  "redacted_skipped": 0
+}
 ```
 
 ## `status`
@@ -376,7 +422,7 @@ $ obicfg diff ./before
 Device identity and per-service state.
 
 ```sh
-obicfg status [--json]
+obicfg status [--json] [--redact]
 ```
 
 ```console
@@ -395,6 +441,11 @@ SP1      true     A     sp2(100)
  "services": [{"service": "SP1", "enabled": "true", "profile": "A", "inbound": "sp2(100)"}]}
 ```
 
+`--redact` masks the serial and MAC. Note `status` reports each service's
+*configuration* — enabled, ITSP letter, inbound route — and **not** its
+registration state; that lives in `telemetry`, under
+`device.services[].status`.
+
 `ModelName`'s factory *default* is `OBi100` on every model in the family; the
 real model only ever appears as a current value. `obicfg` reads the effective
 value, so this output is correct — but anything reading the raw default is not.
@@ -411,10 +462,11 @@ obicfg telemetry [--json] [--calls N] [--no-calls] [--redact] [--watch SECONDS]
 |---|---|
 | `--calls N` | How many recent calls to include (default 20) |
 | `--no-calls` | Skip call history — by far the largest fetch |
-| `--redact` | Mask phone numbers, and the device serial and MAC |
+| `--redact` | Mask phone numbers, and the device serial and MAC. It does **not** mask the WAN address, or a device name embedded in an event line such as `From 'Front Desk' SP3(300)` — read the output before sharing it |
 | `--watch SECONDS` | Repeat until interrupted |
 
-Reads five endpoints: `DI_S_.xml`, `DI_NS_.xml`, `PI_FXS_1_Stats.xml`,
+Reads four endpoints: `DI_S_.xml` (identity, uptime, per-service
+registration, WAN address and the device clock), `PI_FXS_1_Stats.xml`,
 `VS_1_VP_1_L_1_Stats.xml` and `callhistory.xml`. A missing endpoint is
 recorded in `errors` rather than raised — partial telemetry beats none.
 
@@ -441,12 +493,21 @@ recorded in `errors` rather than raised — partial telemetry beats none.
   "calls": [
     {"date": "8/10/2026", "time": "15:55:55", "direction": "inbound",
      "peer": "+15551234567", "from_terminal": "SP1", "to_terminal": "SP2",
-     "connected": true, "ring_s": 0, "talk_s": 28,
+     "connected": true, "answered": true, "ring_s": 0, "talk_s": 28,
      "events": [{"time": "15:55:55", "text": "From SP1(+15551234567)"}]}
   ],
+  "calls_included": true,
   "errors": {}
 }
 ```
+
+A call the device could not classify comes back with `"direction":
+"unknown"` and `peer`, `from_terminal`, `to_terminal` and `talk_s` all
+`null` — an unanswered call, typically. `answered` mirrors `connected`.
+
+`calls_included` is `false` when `--no-calls` was passed. Check it before
+concluding a device has no call history: an empty `calls` list means one of
+two very different things.
 
 Notes on interpreting it:
 
@@ -551,6 +612,8 @@ whatever `OBICFG_CONFIG` points at).
 host      = "192.0.2.50"
 username  = "admin"
 password  = "admin"          # prefer OBI_PASSWORD_FILE
+scheme    = "http"
+port      = 80
 transport = "paramlist"
 timeout   = 15.0
 

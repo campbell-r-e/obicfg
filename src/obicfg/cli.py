@@ -11,7 +11,16 @@ from pathlib import Path
 from . import __version__, config as config_mod, telemetry
 from .client import Client, Transport
 from .device import Device, count_redacted, diff_snapshots
-from .errors import GuardError, ObiError, UsageError, VerificationError
+from .errors import (
+    AuthError,
+    GuardError,
+    ObiError,
+    ResolutionError,
+    TransportError,
+    UsageError,
+    ValidationError,
+    VerificationError,
+)
 from .guard import Guard
 from .model import Page
 from .naming import aliases_for
@@ -72,6 +81,15 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
         return False
 
 
+def _optional_int(value: object) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ObiError(f"port must be a number, got {value!r}") from None
+
+
 def _device(args: argparse.Namespace) -> Device:
     config = config_mod.load_config()
     host = config_mod.resolve("host", args.host, config)
@@ -94,7 +112,7 @@ def _device(args: argparse.Namespace) -> Device:
         username=str(config_mod.resolve("username", args.user, config, "admin")),
         password=config_mod.read_password(args.password, args.password_file, config),
         scheme=str(config_mod.resolve("scheme", args.scheme, config, "http")),
-        port=args.port,
+        port=_optional_int(config_mod.resolve("port", args.port, config)),
         timeout=float(config_mod.resolve("timeout", args.timeout, config, 15.0)),
         transport=transport,
     )
@@ -255,13 +273,18 @@ def _print_plan(changes) -> None:
 def _changes_json(changes, *, dry_run: bool = False, verified: bool = True) -> dict:
     """Machine-readable result of a write, for scripts and agents.
 
-    Reports what was planned, what was sent, and — separately — what the
+    Reports what was planned, what was sent, and -- separately -- what the
     device confirmed. The distinction matters: `applied` only means the
     request went out, and on an OBi that says nothing about whether it took.
+
+    `verified` means "a read-back was performed", so it is False on a dry run.
+    Anything else would let a preview satisfy a success test: dry_run with
+    verified=true and an empty failures list reads exactly like a completed,
+    confirmed write unless the caller also checks that `applied` is non-empty.
     """
     return {
         "dry_run": dry_run,
-        "verified": verified,
+        "verified": verified and not dry_run,
         "plan": [
             {"path": c.path, "old": c.old, "new": c.new, "noop": c.noop}
             for c in changes
@@ -299,8 +322,12 @@ def cmd_set(args: argparse.Namespace) -> int:
     changes = device.plan(assignments)
     pending = [c for c in changes if not c.noop]
     if args.dry_run or not pending:
+        # dry_run reports what was asked for, not whether anything happened to
+        # be a no-op -- conflating them hides "nothing was sent because it was
+        # already right" behind "nothing was sent because you asked for a
+        # preview".
         if args.json:
-            _out(json.dumps(_changes_json(changes, dry_run=True), indent=2))
+            _out(json.dumps(_changes_json(changes, dry_run=args.dry_run), indent=2))
         else:
             _out("plan:")
             _print_plan(changes)
@@ -454,7 +481,12 @@ def cmd_diff(args: argparse.Namespace) -> int:
     if args.json:
         _out(
             json.dumps(
-                [{"path": p, "before": b, "after": a} for p, b, a in differences],
+                {
+                    "differences": [
+                        {"path": p, "before": b, "after": a} for p, b, a in differences
+                    ],
+                    "redacted_skipped": hidden,
+                },
                 indent=2,
             )
         )
@@ -478,17 +510,26 @@ def cmd_apply(args: argparse.Namespace) -> int:
     if profile.require:
         check_requirements(profile, device.identity())
 
-    _out(f"profile: {profile.name}")
-    if profile.description:
-        _out(profile.description)
-    _out()
+    if not args.json:
+        _out(f"profile: {profile.name}")
+        if profile.description:
+            _out(profile.description)
+        _out()
 
     changes = device.plan(profile.assignments)
+    planned_resets = device.plan_reset(profile.reset) if profile.reset else []
     pending = [c for c in changes if not c.noop]
-    _out("plan:")
-    _print_plan(changes)
-    for path in profile.reset:
-        _out(f"  ! {path} -> factory default")
+
+    if args.json and (args.dry_run or (not pending and not profile.reset)):
+        payload = _changes_json(changes + planned_resets, dry_run=True)
+        payload["profile"] = profile.name
+        _out(json.dumps(payload, indent=2))
+        return EXIT_OK
+    if not args.json:
+        _out("plan:")
+        _print_plan(changes)
+        for change in planned_resets:
+            _out(f"  ! {change.path}: {change.old!r} -> factory default {change.new!r}")
     if not pending and not profile.reset:
         _out("device already matches this profile")
         return EXIT_OK
@@ -502,11 +543,16 @@ def cmd_apply(args: argparse.Namespace) -> int:
 
     device.apply(changes)
     reset_changes = device.reset_to_default(profile.reset) if profile.reset else []
-    _out()
-    for change in pending + [c for c in reset_changes if not c.noop]:
-        marker = "ok  " if change.verified else "FAIL"
-        _out(f"  {marker} {change.path} = {change.new!r}")
     failures = device.verify_failures(changes) + device.verify_failures(reset_changes)
+    if args.json:
+        payload = _changes_json(changes + reset_changes)
+        payload["profile"] = profile.name
+        _out(json.dumps(payload, indent=2))
+    else:
+        _out()
+        for change in pending + [c for c in reset_changes if not c.noop]:
+            marker = "ok  " if change.verified else "FAIL"
+            _out(f"  {marker} {change.path} = {change.new!r}")
     if failures:
         return EXIT_VERIFY
 
@@ -520,6 +566,10 @@ def cmd_apply(args: argparse.Namespace) -> int:
 def cmd_status(args: argparse.Namespace) -> int:
     device = _device(args)
     identity = device.identity()
+    if args.redact:
+        for key in ("SerialNumber", "MACAddress"):
+            if identity.get(key):
+                identity[key] = "<redacted>"
     services = []
     for index, page_name in enumerate(
         ("VS_1_VP_1_L_1_", "VS_1_VP_1_L_2_", "VS_1_VP_1_L_3_", "VS_1_VP_1_L_4_"), 1
@@ -843,7 +893,9 @@ def build_parser() -> argparse.ArgumentParser:
     reboot_group.add_argument("--no-reboot", dest="reboot", action="store_false",
                               help="never reboot, overriding the profile")
 
-    add("status", cmd_status, "show device identity and per-service state")
+    status = add("status", cmd_status, "show device identity and per-service state")
+    status.add_argument("--redact", action="store_true",
+                        help="mask the device serial and MAC")
 
     tel = add("telemetry", cmd_telemetry,
               "read live operational data: uptime, registration, RTP quality, "
@@ -867,23 +919,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _fail(args: argparse.Namespace, exc: Exception, code: int, kind: str) -> int:
+    """Report an error, in JSON too if the caller asked for JSON.
+
+    Without this, every failure path prints prose to stderr and nothing to
+    stdout, so a caller doing `json.loads(stdout)` gets an empty-input
+    exception instead of the actual error -- on every error.
+    """
+    print(f"obicfg: {exc}", file=sys.stderr)
+    if getattr(args, "json", False):
+        print(json.dumps({"error": str(exc), "kind": kind, "exit": code}, indent=2))
+    return code
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
     except UsageError as exc:
-        print(f"obicfg: {exc}", file=sys.stderr)
-        return EXIT_USAGE
+        return _fail(args, exc, EXIT_USAGE, "usage")
     except GuardError as exc:
-        print(f"obicfg: {exc}", file=sys.stderr)
-        return EXIT_GUARD
+        return _fail(args, exc, EXIT_GUARD, "guard")
     except VerificationError as exc:
-        print(f"obicfg: {exc}", file=sys.stderr)
-        return EXIT_VERIFY
+        return _fail(args, exc, EXIT_VERIFY, "not_applied")
+    except ValidationError as exc:
+        return _fail(args, exc, EXIT_ERROR, "invalid_value")
+    except ResolutionError as exc:
+        return _fail(args, exc, EXIT_ERROR, "not_found")
+    except AuthError as exc:
+        return _fail(args, exc, EXIT_ERROR, "auth")
+    except TransportError as exc:
+        return _fail(args, exc, EXIT_ERROR, "unreachable")
     except ObiError as exc:
-        print(f"obicfg: {exc}", file=sys.stderr)
-        return EXIT_ERROR
+        return _fail(args, exc, EXIT_ERROR, "error")
     except KeyboardInterrupt:
         print("obicfg: interrupted", file=sys.stderr)
         return EXIT_ERROR
