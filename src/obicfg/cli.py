@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, config as config_mod
+from . import __version__, config as config_mod, telemetry
 from .client import Client, Transport
 from .device import Device, count_redacted, diff_snapshots
 from .errors import GuardError, ObiError, VerificationError
@@ -467,6 +467,109 @@ def cmd_status(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _format_uptime(seconds: int | None) -> str:
+    if seconds is None:
+        return "?"
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes = rest // 60
+    return f"{days}d {hours}h {minutes}m" if days else f"{hours}h {minutes}m"
+
+
+def _print_telemetry(reading) -> None:
+    device = reading.device
+    _out(
+        f"{device.model or '?'}  fw {device.firmware or '?'}  "
+        f"up {_format_uptime(device.uptime_s)}"
+        + (f"  ({device.reboots} reboots)" if device.reboots is not None else "")
+    )
+    if device.system_time:
+        _out(f"device clock: {device.system_time}")
+    _out()
+
+    quality = {q.sp: q for q in reading.quality}
+    rows = []
+    for service in device.services:
+        stats = quality.get(service.sp)
+        loss = "" if stats is None or stats.loss_percent is None else f"{stats.loss_percent:.2f}%"
+        rows.append(
+            [
+                f"SP{service.sp}",
+                _shorten(service.status, 34),
+                str(service.active_calls),
+                str(stats.packets_sent) if stats else "",
+                str(stats.packets_received) if stats else "",
+                str(stats.packets_lost) if stats else "",
+                loss,
+                "" if service.healthy else "!",
+            ]
+        )
+    if rows:
+        _out(_table(rows, ["SVC", "STATUS", "CALLS", "TX PKTS", "RX PKTS", "LOST", "LOSS", ""]))
+        _out()
+
+    port = reading.port
+    _out(
+        "phone port: "
+        + ", ".join(
+            part
+            for part in (
+                port.state,
+                None if port.loop_current_ma is None else f"loop {port.loop_current_ma:g} mA",
+                None if port.vbat_v is None else f"VBAT {port.vbat_v:g} V",
+                None if port.tipring_v is None else f"tip-ring {port.tipring_v:g} V",
+                f"last caller {port.last_caller}" if port.last_caller else None,
+            )
+            if part
+        )
+        or "no data"
+    )
+
+    if reading.calls:
+        _out()
+        _out(
+            _table(
+                [
+                    [
+                        f"{c.date} {c.time}",
+                        c.direction,
+                        _shorten(c.peer or "", 22),
+                        f"{c.from_terminal or '?'}->{c.to_terminal or '?'}",
+                        "yes" if c.answered else "no",
+                        "" if c.ring_s is None else f"{c.ring_s}s",
+                        "" if c.talk_s is None else f"{c.talk_s}s",
+                    ]
+                    for c in reading.calls
+                ],
+                ["WHEN", "DIRECTION", "PEER", "PATH", "ANSWERED", "RING", "TALK"],
+            )
+        )
+    for endpoint, problem in reading.errors.items():
+        _out(f"note: {endpoint} unavailable ({problem})")
+
+
+def cmd_telemetry(args: argparse.Namespace) -> int:
+    device = _device(args)
+    while True:
+        reading = telemetry.read(
+            device, calls=args.calls, include_calls=not args.no_calls
+        )
+        if args.redact:
+            telemetry.redact(reading)
+        if args.json:
+            _out(json.dumps(reading.to_dict(), indent=2))
+        else:
+            _print_telemetry(reading)
+        if not args.watch:
+            return EXIT_OK
+        try:
+            time.sleep(args.watch)
+        except KeyboardInterrupt:
+            return EXIT_OK
+        _out()
+        _out("-" * 60)
+
+
 def cmd_reboot(args: argparse.Namespace) -> int:
     device = _device(args)
     if not _confirm(f"reboot {device.client.host}?", args.yes):
@@ -528,40 +631,74 @@ def cmd_probe(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------- parsing
 
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="obicfg",
-        description="Configure an OBi200-family ATA from the command line.",
-        epilog="Exit codes: 0 ok, 1 error, 2 usage, 3 write not applied, 4 blocked by guard.",
-    )
-    parser.add_argument("--version", action="version", version=f"obicfg {__version__}")
+def _add_global_args(parser: argparse.ArgumentParser, *, suppress: bool) -> None:
+    """Add the connection and safety flags.
+
+    Called twice: once on the top-level parser with real defaults, and once on
+    a parent shared by every subcommand with ``SUPPRESS`` defaults.  The
+    SUPPRESS half is what makes ``obicfg status --host X`` work as well as
+    ``obicfg --host X status`` -- a subparser overwrites the whole namespace
+    with its own results, so a suppressed default is the only way for a flag
+    given before the subcommand to survive one that was not given after it.
+    """
+
+    def default(value):
+        return argparse.SUPPRESS if suppress else value
+
+    def helptext(text: str) -> str:
+        return argparse.SUPPRESS if suppress else text
 
     connection = parser.add_argument_group("connection")
-    connection.add_argument("-H", "--host", help="device address (env: OBI_HOST)")
-    connection.add_argument("-u", "--user", help="admin username (default: admin)")
-    connection.add_argument("-p", "--password", help="admin password (prefer --password-file)")
-    connection.add_argument("--password-file", help="file containing the admin password")
-    connection.add_argument("--port", type=int, help="admin port, if not the default")
-    connection.add_argument("--scheme", choices=("http", "https"), help="default: http")
-    connection.add_argument("--timeout", type=float, help="per-request timeout in seconds")
-    connection.add_argument(
-        "--transport",
-        choices=("paramlist", "query"),
-        help="how writes are encoded (default: paramlist)",
-    )
+    connection.add_argument("-H", "--host", default=default(None),
+                            help=helptext("device address (env: OBI_HOST)"))
+    connection.add_argument("-u", "--user", default=default(None),
+                            help=helptext("admin username (default: admin)"))
+    connection.add_argument("-p", "--password", default=default(None),
+                            help=helptext("admin password (prefer --password-file)"))
+    connection.add_argument("--password-file", default=default(None),
+                            help=helptext("file containing the admin password"))
+    connection.add_argument("--port", type=int, default=default(None),
+                            help=helptext("admin port, if not the default"))
+    connection.add_argument("--scheme", choices=("http", "https"), default=default(None),
+                            help=helptext("default: http"))
+    connection.add_argument("--timeout", type=float, default=default(None),
+                            help=helptext("per-request timeout in seconds"))
+    connection.add_argument("--transport", choices=("paramlist", "query"), default=default(None),
+                            help=helptext("how writes are encoded (default: paramlist)"))
 
     safety = parser.add_argument_group("safety")
     safety.add_argument(
         "--unsafe",
         action="store_true",
-        help="disable write protection on provisioned/irreplaceable settings",
+        default=default(False),
+        help=helptext("disable write protection on provisioned/irreplaceable settings"),
     )
-    safety.add_argument("-y", "--yes", action="store_true", help="do not prompt")
+    safety.add_argument("-y", "--yes", action="store_true", default=default(False),
+                        help=helptext("do not prompt"))
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="obicfg",
+        description="Configure an OBi200-family ATA from the command line.",
+        epilog=(
+            "Connection and safety flags may be given before or after the "
+            "subcommand. Exit codes: 0 ok, 1 error, 2 usage, 3 write not "
+            "applied, 4 blocked by guard."
+        ),
+    )
+    parser.add_argument("--version", action="version", version=f"obicfg {__version__}")
+    _add_global_args(parser, suppress=False)
+
+    common = argparse.ArgumentParser(add_help=False)
+    _add_global_args(common, suppress=True)
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     def add(name: str, func, help_text: str, *, json_flag: bool = True):
-        sub = subparsers.add_parser(name, help=help_text, description=help_text)
+        sub = subparsers.add_parser(
+            name, help=help_text, description=help_text, parents=[common]
+        )
         sub.set_defaults(func=func)
         if json_flag:
             sub.add_argument("--json", action="store_true", help="machine-readable output")
@@ -616,6 +753,18 @@ def build_parser() -> argparse.ArgumentParser:
                               help="never reboot, overriding the profile")
 
     add("status", cmd_status, "show device identity and per-service state")
+
+    tel = add("telemetry", cmd_telemetry,
+              "read live operational data: uptime, registration, RTP quality, "
+              "line voltages and call history")
+    tel.add_argument("--calls", type=int, default=20, metavar="N",
+                     help="how many recent calls to include (default: 20)")
+    tel.add_argument("--no-calls", action="store_true",
+                     help="skip call history (it is the largest fetch by far)")
+    tel.add_argument("--redact", action="store_true",
+                     help="mask phone numbers in call history and last-caller")
+    tel.add_argument("--watch", type=float, metavar="SECONDS",
+                     help="repeat every SECONDS until interrupted")
 
     reboot = add("reboot", cmd_reboot, "reboot the device", json_flag=False)
     reboot.add_argument("--wait", action="store_true", help="block until it answers again")

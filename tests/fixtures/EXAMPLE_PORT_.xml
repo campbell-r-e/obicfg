@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<model reboot_req="false" >
+<object name="Port Status" status="true" access="readOnly" >
+<pagetitle >
+PHONE Port Status
+</pagetitle>
+<parameter name="State" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="dddd0001" type="input" default=" " current="Off Hook" >
+</value>
+</parameter>
+<parameter name="LoopCurrent" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="dddd0002" type="input" default=" " current="23 mA" >
+</value>
+</parameter>
+<parameter name="VBAT" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="dddd0003" type="input" default=" " current="56 V" >
+</value>
+</parameter>
+<parameter name="TipRingVoltage" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="dddd0004" type="input" default=" " current="6.5 V" >
+</value>
+</parameter>
+<parameter name="LastCallerInfo" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="dddd0005" type="input" default=" " current="+15551234567" >
+</value>
+</parameter>
+</object>
+</model>

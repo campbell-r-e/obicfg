@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<model reboot_req="false" >
+<object name="Reset Statistics" access="readWrite" >
+<parameter name="ResetStatistics" access="readWrite" >
+<syntax ><boolean ></boolean ></syntax >
+<value hash="eeee0000" type="bool" default="false" >
+</value>
+</parameter>
+</object>
+<object name="RTP Statistics" access="readOnly" >
+<parameter name="PacketsSent" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0011" type="input" default="0" current="136092" >
+</value>
+</parameter>
+<parameter name="PacketsReceived" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0012" type="input" default="0" current="9900" >
+</value>
+</parameter>
+<parameter name="BytesSent" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0013" type="input" default="0" current="21774720" >
+</value>
+</parameter>
+<parameter name="BytesReceived" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0014" type="input" default="0" current="1584000" >
+</value>
+</parameter>
+<parameter name="PacketsLost" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0015" type="input" default="0" current="100" >
+</value>
+</parameter>
+<parameter name="Overruns" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0016" type="input" default="0" current="2" >
+</value>
+</parameter>
+<parameter name="Underruns" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0017" type="input" default="0" current="3" >
+</value>
+</parameter>
+</object>
+<object name="Reset Statistics" access="readWrite" >
+<parameter name="ResetStatistics" access="readWrite" >
+<syntax ><boolean ></boolean ></syntax >
+<value hash="eeee0020" type="bool" default="false" >
+</value>
+</parameter>
+</object>
+<object name="RTP Statistics" access="readOnly" >
+<parameter name="PacketsSent" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0021" type="input" default="0" current="7" >
+</value>
+</parameter>
+<parameter name="PacketsReceived" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0022" type="input" default="0" current="8" >
+</value>
+</parameter>
+<parameter name="PacketsLost" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="eeee0025" type="input" default="0" >
+</value>
+</parameter>
+</object>
+</model>

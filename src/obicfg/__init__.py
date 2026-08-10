@@ -20,6 +20,7 @@ from .errors import (
     ValidationError,
     VerificationError,
 )
+from . import telemetry
 from .guard import Guard
 from .model import Page, Parameter, parse_menu, parse_page
 
@@ -39,5 +40,6 @@ __all__ = [
     "ValidationError",
     "VerificationError",
     "parse_menu",
+    "telemetry",
     "parse_page",
 ]

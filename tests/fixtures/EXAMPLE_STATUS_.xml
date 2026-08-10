@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<model reboot_req="false" >
+<object name="WAN Status" status="true" access="readOnly" >
+<pagetitle >
+System Status
+</pagetitle>
+<parameter name="IPAddress" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0001" type="input" default=" " current="192.0.2.50" >
+</value>
+</parameter>
+</object>
+<object name="Product Information" access="readOnly" >
+<parameter name="ModelName" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0002" type="input" default="OBi100" current="OBi200" >
+</value>
+</parameter>
+<parameter name="SoftwareVersion" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0003" type="input" default=" " current="3.2.2 (Build: 8680EX)" >
+</value>
+</parameter>
+<parameter name="HardwareVersion" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0004" type="input" default=" " current="1.4" >
+</value>
+</parameter>
+<parameter name="SerialNumber" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0005" type="input" default=" " current="0000TESTSERIAL" >
+</value>
+</parameter>
+<parameter name="UpTime" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0006" type="input" default=" " current=" 2 Days 17:07:14    (4)" >
+</value>
+</parameter>
+<parameter name="SystemTime" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0007" type="input" default=" " current="16:30:45     08/10/2026, Monday" >
+</value>
+</parameter>
+</object>
+<object name="OBiTALK Service Status" access="readOnly" >
+<parameter name="Status" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0008" type="input" default=" " current="Backing Off (29)" >
+</value>
+</parameter>
+</object>
+<object name="SP1 Service Status" access="readOnly" >
+<parameter name="Status" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0011" type="input" default=" " current="Connected" >
+</value>
+</parameter>
+<parameter name="CallState" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0012" type="input" default=" " current="1 Active Calls" >
+</value>
+</parameter>
+</object>
+<object name="SP2 Service Status" access="readOnly" >
+<parameter name="Status" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0021" type="input" default=" " current="Registration Not Required" >
+</value>
+</parameter>
+<parameter name="CallState" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0022" type="input" default=" " current="0 Active Calls" >
+</value>
+</parameter>
+</object>
+<object name="SP3 Service Status" access="readOnly" >
+<parameter name="Status" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0031" type="input" default=" " current="Service Not Configured" >
+</value>
+</parameter>
+<parameter name="CallState" access="readOnly" >
+<syntax ><string ></string ></syntax >
+<value hash="cccc0032" type="input" default=" " current="0 Active Calls" >
+</value>
+</parameter>
+</object>
+</model>

@@ -69,6 +69,9 @@ obicfg --host 192.0.2.50 --password-file ~/.obi-pw status
 OBI_HOST=192.0.2.50 OBI_PASSWORD=admin obicfg status
 ```
 
+Connection and safety flags work before or after the subcommand, so both
+`obicfg --host X status` and `obicfg status --host X` do the same thing.
+
 Or put it in `~/.config/obicfg/config.toml` once — see
 [`examples/config.toml`](examples/config.toml). Prefer `--password-file` or
 `OBI_PASSWORD_FILE` over `--password`: an argument is visible in `ps` output
@@ -141,6 +144,53 @@ after a partial failure converges instead of thrashing. A `[require]` table
 pins a profile to a model or firmware so it cannot be applied to the wrong box
 by a mistyped `--host`. See [`examples/`](examples/).
 
+## Telemetry
+
+Configuration is what the device should do; telemetry is what it is actually
+doing.
+
+```console
+$ obicfg telemetry --calls 4
+OBi200  fw 3.2.2 (Build: 8680EX)  up 2d 17h 34m  (4 reboots)
+device clock: 16:57:42     08/10/2026, Monday
+
+SVC  STATUS                     CALLS  TX PKTS  RX PKTS  LOST  LOSS
+---  -------------------------  -----  -------  -------  ----  -----  -
+SP1  Connected                  0      136092   138858   0     0.00%
+SP2  Registration Not Required  0      138574   136191   0     0.00%
+SP4  Service Not Configured     0      0        0        0            !
+
+phone port: On Hook, loop 0 mA, VBAT 56 V, tip-ring 45 V
+
+WHEN                DIRECTION  PEER          PATH      ANSWERED  RING  TALK
+------------------  ---------  ------------  --------  --------  ----  ----
+8/10/2026 15:55:55  inbound    +xxxxxxxxx30  SP1->SP2  yes       0s    28s
+```
+
+Five endpoints carry all of it: device status, WAN and clock, the analogue
+port's electrical state, RTP counters per service, and call detail records.
+`--json` emits the parsed structures for a collector to store; `--watch 30`
+repeats until interrupted; `--redact` masks phone numbers, which is worth
+remembering because call history is the one part of an ATA's state that is
+personal data.
+
+Three things the parsing gets right that a naive reading would not:
+
+- **`callhistory.xml` is not in the admin menu.** Nothing that discovers
+  pages by crawling the UI will find it, and it has a schema of its own —
+  an event log per call rather than a settings page. Ring and talk time come
+  from the gaps between those events, including across midnight.
+- **The call-quality page repeats `<object name="RTP Statistics">` once per
+  service**, all with identical parameter names. The block boundaries carry
+  the meaning, so grouping by name would fold SP4's counters onto SP1's.
+- **"Registration Not Required" is healthy**, not an error — it is what an
+  IP-authenticated trunk reports when there is no registrar to talk to.
+  "Service Not Configured" usually means the URI is empty.
+
+Packet loss is reported against packets that should have arrived
+(`received + lost`), not against packets sent; a device cannot lose its own
+outbound stream.
+
 ## Write protection
 
 By default `obicfg` refuses to overwrite settings that cannot be recovered.
@@ -186,7 +236,10 @@ form serialiser — and the device undoes both.
 
 `obicfg` reproduces that exactly (`--transport paramlist`, the default), which
 is why it can write values containing spaces and `#`, and why it can batch a
-whole page into one request.
+whole page into one request. That is not a deduction from reading the
+JavaScript — `obicfg probe` round-trips a plain value, a value with a space
+and a value with a `#` through a scratch parameter and reads each back. On an
+OBi200 running 3.2.2, all three survive intact.
 
 There is an older form: `POST /result.html?hash=value`, with the value raw in
 the query string. Nothing decodes it, so bytes are stored verbatim — send

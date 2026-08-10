@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CallHistoryFile>
+<CallHistory date="8/10/2026" time="15:55:55">
+<Event time="15:55:55">
+<e0>From SP1(+15551234567)</e0>
+<e1>To PH(1001)</e1>
+</Event>
+<Event time="15:56:05">
+<e1>Call Connected</e1>
+</Event>
+<Event time="15:56:23">
+<e0>Call Ended</e0>
+</Event>
+</CallHistory>
+<CallHistory date="8/9/2026" time="23:59:30">
+<Event time="23:59:30">
+<e0>From PH(1001)</e0>
+<e1>To SP2(+15559876543)</e1>
+</Event>
+<Event time="23:59:40">
+<e1>Call Connected</e1>
+</Event>
+<Event time="00:00:10">
+<e0>Call Ended</e0>
+</Event>
+</CallHistory>
+<CallHistory date="8/9/2026" time="09:00:00">
+<Event time="09:00:00">
+<e0>From SP1(+15551234567)</e0>
+<e1>To PH(1001)</e1>
+</Event>
+<Event time="09:00:25">
+<e0>Call Ended</e0>
+</Event>
+</CallHistory>
+</CallHistoryFile>

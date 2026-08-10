@@ -287,6 +287,40 @@ def parse_page(name: str, xml: bytes | str) -> Page:
     )
 
 
+def parse_objects(xml: bytes | str) -> list[tuple[str, dict[str, str]]]:
+    """``(object name, {parameter: effective value})`` in document order.
+
+    :func:`parse_page` flattens a page into one list of parameters, which is
+    what you want for configuration.  The status pages need the opposite: the
+    call-quality page carries one ``<object name="RTP Statistics">`` block
+    *per service*, all with identical parameter names, so the block boundaries
+    carry the meaning.  Grouping by name would collapse SP1's counters onto
+    SP4's; this keeps repeats distinct and ordered.
+    """
+    root = ET.fromstring(xml)
+    out: list[tuple[str, dict[str, str]]] = []
+
+    def walk(node: ET.Element) -> None:
+        for child in node:
+            if child.tag == "object":
+                entries: dict[str, str] = {}
+                for parameter in child.findall("parameter"):
+                    value = parameter.find("value")
+                    if value is None:
+                        continue
+                    current = value.get("current")
+                    entries[parameter.get("name", "")] = (
+                        value.get("default", "") if current is None else current
+                    )
+                out.append((child.get("name", ""), entries))
+                walk(child)
+            else:
+                walk(child)
+
+    walk(root)
+    return out
+
+
 _MENU_ENTRY = re.compile(
     r"""onclick\s*=\s*["']e\(\s*['"]([A-Za-z0-9_]+\.xml)['"]\s*\)["'][^>]*>([^<]*)<""",
     re.IGNORECASE,
