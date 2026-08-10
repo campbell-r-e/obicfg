@@ -19,26 +19,59 @@ while looking entirely reasonable.
 
 ## Aliases
 
+Every alias, in full. Several pages have two names because both readings are
+natural; they resolve to the same page.
+
 | Alias | Page | What lives there |
 |---|---|---|
-| `sp1`–`sp4` | `VS_1_VP_1_L_1_`–`_L_4_` | per-service: enable, URI, routing, auth, SIP port |
-| `itsp.a`–`itsp.d` | `VS_1_VP_1_`–`VS_1_VP_4_` | profile-wide behaviour |
-| `itsp.a.sip`–`itsp.d.sip` | `VS_1_VP_n_SIP_` | proxy, registrar, outbound proxy, transport |
-| `itsp.a.rtp`–`itsp.d.rtp` | `VS_1_VP_n_RTP_` | RTP ports, DTMF, codecs in use |
-| `phone`, `fxs` | `VS_1_X_FXS_1_` | the analogue port: dial plan, routing, primary line |
-| `gateways`, `gw` | `VS_1_X_GW_` | gateways and trunk groups |
-| `aa` | `VS_1_X_AA_1_` | auto attendant |
-| `codec.a`, `codec.b` | `VS_1_CODEC_1_`, `_2_` | codec profiles |
-| `star.a`, `star.b` | `VS_1_X_STAR_1_`, `_2_` | star-code profiles |
-| `ring.a`, `ring.b` | `VS_1_VP_1_L_1_R_`, `_L_2_R_` | ring profiles |
+| `sp1` | `VS_1_VP_1_L_1_` | SP1 service: enable, URI, call routing, auth, its own SIP port |
+| `sp2` | `VS_1_VP_1_L_2_` | SP2 service (same fields as SP1) |
+| `sp3` | `VS_1_VP_1_L_3_` | SP3 service (same fields as SP1) |
+| `sp4` | `VS_1_VP_1_L_4_` | SP4 service (same fields as SP1) |
+| `itsp.a` | `VS_1_VP_1_` | ITSP Profile A: profile-wide call behaviour |
+| `itsp.b` | `VS_1_VP_2_` | ITSP Profile B |
+| `itsp.c` | `VS_1_VP_3_` | ITSP Profile C |
+| `itsp.d` | `VS_1_VP_4_` | ITSP Profile D |
+| `itsp.a.sip` | `VS_1_VP_1_SIP_` | Profile A SIP: proxy, registrar, outbound proxy, transport |
+| `itsp.b.sip` | `VS_1_VP_2_SIP_` | Profile B SIP |
+| `itsp.c.sip` | `VS_1_VP_3_SIP_` | Profile C SIP |
+| `itsp.d.sip` | `VS_1_VP_4_SIP_` | Profile D SIP |
+| `itsp.a.rtp` | `VS_1_VP_1_RTP_` | Profile A RTP: port range, DTMF method, codec selection |
+| `itsp.b.rtp` | `VS_1_VP_2_RTP_` | Profile B RTP |
+| `itsp.c.rtp` | `VS_1_VP_3_RTP_` | Profile C RTP |
+| `itsp.d.rtp` | `VS_1_VP_4_RTP_` | Profile D RTP |
+| `tone.a` | `VS_1_VP_1_T_` | Tone Profile A: call-progress tones (dial, busy, ringback) |
+| `tone.b` | `VS_1_VP_2_T_` | Tone Profile B |
+| `ring.a` | `VS_1_VP_1_L_1_R_` | Ring Profile A: ring cadences and distinctive ring rules |
+| `ring.b` | `VS_1_VP_1_L_2_R_` | Ring Profile B |
+| `codec.a` | `VS_1_CODEC_1_` | Codec Profile A: which codecs are offered, in what order |
+| `codec.b` | `VS_1_CODEC_2_` | Codec Profile B |
+| `phone` | `VS_1_X_FXS_1_` | the analogue PHONE port: dial plan, outbound routing, primary line |
+| `fxs` | `VS_1_X_FXS_1_` | same page as `phone` |
+| `gateways` | `VS_1_X_GW_` | gateways and trunk groups |
+| `gw` | `VS_1_X_GW_` | same page as `gateways` |
+| `aa` | `VS_1_X_AA_1_` | the auto attendant |
+| `autoattendant` | `VS_1_X_AA_1_` | same page as `aa` |
+| `pbx` | `VS_1_X_PBX_` | OBiPLUS, the built-in mini-PBX |
+| `obiplus` | `VS_1_X_PBX_` | same page as `pbx` |
+| `p2p` | `VS_1_X_P2P_1_` | OBiTALK service settings (the cloud is retired; kept for reference) |
+| `obitalk` | `VS_1_X_P2P_1_` | same page as `p2p` |
+| `star.a` | `VS_1_X_STAR_1_` | Star Code Profile A: what `*xx` codes do |
+| `star.b` | `VS_1_X_STAR_2_` | Star Code Profile B |
+| `speeddial` | `SPEEDDIAL_` | speed-dial slots |
 | `digitmaps` | `DIGITMAPS_` | user-defined digit maps |
-| `speeddial` | `SPEEDDIAL_` | speed dial slots |
+| `pagegroups` | `VS_1_X_PageGroups` | paging groups |
+| `bt1` | `VS_1_X_BT_1_` | Bluetooth pairing 1 (OBi200 with a USB dongle) |
+| `bt2` | `VS_1_X_BT_2_` | Bluetooth pairing 2 |
 | `wan` | `DI_NS_` | WAN addressing, NTP, time zone |
-| `status`, `system` | `DI_S_` | identity, uptime, per-service status |
-| `admin` | `DM_MISC_` | device admin, syslog, web port |
-| `wifi` | `USB_WIFI_` | USB Wi-Fi (OBi200 with dongle) |
+| `status` | `DI_S_` | identity, uptime, per-service status (read-only) |
+| `system` | `DI_S_` | same page as `status` |
+| `admin` | `DM_MISC_` | device admin: web port, syslog, admin password |
 | `provisioning` | `DM_S_` | auto-provisioning — **protected, do not write** |
-| `wizard` | `SetupWizard` | **protected, do not use** |
+| `wifi` | `USB_WIFI_` | USB Wi-Fi settings |
+| `wizard` | `SetupWizard` | the Setup Wizard — **protected, do not use** |
+| `sp1.stats` | `VS_1_VP_1_L_1_Stats` | RTP counters per service (read-only) |
+| `phone.stats` | `PI_FXS_1_Stats` | analogue port hardware state: hook, loop current, VBAT (read-only) |
 
 Raw page names always work. `obicfg pages` lists what a given model actually
 has; `obicfg search <regex>` finds a parameter without knowing either name.

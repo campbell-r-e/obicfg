@@ -46,6 +46,8 @@ breaking. Reports from other models are welcome.
 Requires Python 3.8 or newer. There are no dependencies — not as a boast, but
 because the machine that can reach an ATA is often a router, a NAS or a
 fifteen-year-old netbook where `pip install` is a whole project of its own.
+The full suite passes on 3.8, 3.9, 3.10 and 3.11+; on anything before 3.11 the
+bundled TOML parser takes over from `tomllib`, and that path is covered too.
 
 ```sh
 pip install .
@@ -138,6 +140,10 @@ Describe the state you want, apply it as often as you like:
 obicfg apply examples/pbx-trunks.toml --dry-run
 obicfg apply examples/pbx-trunks.toml
 ```
+
+Worked examples: [`examples/pbx-trunks.toml`](examples/pbx-trunks.toml) (two
+SIP trunks to a PBX) and [`examples/p2p-direct.toml`](examples/p2p-direct.toml)
+(two OBis calling each other with no server at all).
 
 Applying is idempotent — settings already correct are skipped, so re-running
 after a partial failure converges instead of thrashing. A `[require]` table
