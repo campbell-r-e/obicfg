@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Device backups. A dump contains the unit's MAC, serial and any stored
+# SIP credentials -- keep them out of the repository. Use `--redact` if you
+# need to share one.
+backups/
+*-snapshot.json
+snapshot.json
+
+# Local connection settings (the shipped sample is tracked).
+config.toml
+!examples/config.toml
+.env

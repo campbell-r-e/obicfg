@@ -1,0 +1,44 @@
+# Two OBis calling each other directly, with no server anywhere.
+#
+# Useful when there is no internet at all: a workshop, a boat, a field site,
+# an amateur-radio mesh, a lab bench. Each unit points SP1 straight at the
+# other's IP address and registration is switched off, so nothing but the two
+# boxes is involved.
+#
+# Note this is *not* the OBiTALK "dial an OBi number" feature. That was always
+# cloud-mediated and it stopped working when the OBiTALK service was retired
+# in November 2024; there is no raw-IP form of it to fall back on. Plain SIP
+# between two addresses still works fine and always will.
+#
+# Apply this file to the first unit and the mirrored values to the second:
+#
+#   obicfg -H 192.0.2.21 apply examples/p2p-direct.toml
+#   obicfg -H 192.0.2.22 set itsp.a.sip.ProxyServer=192.0.2.21 sp1.URI=200 \
+#                            sp1.CallerIDName="Workshop"
+#
+# Then pick up the first phone and dial 200; pick up the second and dial 100.
+#
+# Careful: this writes ITSP Profile A and SP1, which on a unit that was ever
+# provisioned by OBiTALK is where the irreplaceable credential lives. obicfg
+# will refuse and tell you so if it detects one. On a factory-reset unit, or
+# one that was only ever configured by hand, there is nothing to lose.
+
+name = "Point-to-point SIP between two OBis"
+description = "Serverless direct dialling on a LAN with no internet."
+
+[settings]
+"itsp.a.sip.ProxyServer"     = "192.0.2.22"   # the *other* unit
+"itsp.a.sip.ProxyServerPort" = 5060
+
+"sp1.Enable"             = true
+"sp1.X_RegisterEnable"   = false              # there is no registrar to talk to
+"sp1.URI"                = "100"              # this unit answers as 100
+"sp1.CallerIDName"       = "Shop floor"
+"sp1.X_InboundCallRoute" = "ph"               # incoming calls ring the phone
+
+# Dial a bare extension and it goes out SP1. The stock route sends unmatched
+# numbers to the retired OBiTALK service, where they vanish without a sound.
+"phone.OutboundCallRoute" = "{(<**1:>(Msp1)):sp1},{(Msp1):sp1},{(Mpli):pli}"
+
+[after]
+reboot = true          # SP identity changes settle cleanly after a restart

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="default.xsl"?>
+<model reboot_req="true" >
+<object name="WAN Status" status="true" access="readOnly" minEntries="1" maxEntries="1" >
+<pagetitle >
+System Status
+</pagetitle>
+<description >
+Synthetic status page. Note the two objects sharing a parameter name, which
+is why parameters are addressable as Object.Name as well as Name.
+</description>
+<parameter name="MACAddress" access="readOnly" >
+<description >
+WAN MAC address
+</description>
+<syntax >
+<string >
+</string>
+</syntax>
+<value hash="bbbb0001" type="input" default=" " current="000000000001" >
+</value>
+</parameter>
+</object>
+<object name="Product Information" access="readOnly" minEntries="1" maxEntries="1" >
+<description >
+General device information
+</description>
+<parameter name="ModelName" access="readOnly" >
+<description >
+Model name
+</description>
+<syntax >
+<string >
+<size maxLength="64" >
+</size>
+</string>
+</syntax>
+<value hash="bbbb0002" type="input" default="OBi100" current="OBi200" >
+</value>
+</parameter>
+<parameter name="MACAddress" access="readOnly" >
+<description >
+Device MAC address
+</description>
+<syntax >
+<string >
+</string>
+</syntax>
+<value hash="bbbb0003" type="input" default=" " current="000000000002" >
+</value>
+</parameter>
+<parameter name="SoftwareVersion" access="readOnly" >
+<description >
+Firmware version
+</description>
+<syntax >
+<string >
+</string>
+</syntax>
+<value hash="bbbb0004" type="input" default=" " current="3.2.2 (Build: 8680EX)" >
+</value>
+</parameter>
+<parameter name="Uptime" access="readOnly" >
+<description >
+Time since last reboot
+</description>
+<syntax >
+<string >
+</string>
+</syntax>
+<value hash="bbbb0005" type="input" default=" " current="0 days 1:02:03" >
+</value>
+</parameter>
+</object>
+</model>

@@ -1,0 +1,32 @@
+# Copy to ~/.config/obicfg/config.toml and chmod 600.
+#
+# Every value here can be overridden by a flag (--host) or an environment
+# variable (OBI_HOST). Nothing in this file is required; without it, pass
+# --host on each invocation.
+
+[device]
+host     = "192.0.2.50"
+username = "admin"
+# Prefer OBI_PASSWORD_FILE or --password-file over storing this in plain text.
+# A password passed as --password is visible in `ps` to every user on the box.
+password = "admin"
+
+# How writes are encoded. "paramlist" is what the device's own web UI does and
+# is the default; "query" is the older raw-query-string form, which cannot
+# carry a space or a '#'. Switch only if a firmware ignores the default.
+transport = "paramlist"
+
+timeout = 15.0
+
+[guard]
+# Protect additional pages or parameters. Patterns are fnmatch globs over
+# "page.parameter", matched case-insensitively.
+extra = []
+
+# Drop one of the built-in protections by naming its exact pattern.
+allow = []
+
+# Refuse writes to parameters whose stored value is a provisioning macro
+# (${DSN}, $MAC, ...), and to credentials sharing a page with one. These came
+# from a provisioning server that no longer exists and cannot be recreated.
+detect_provisioned = true

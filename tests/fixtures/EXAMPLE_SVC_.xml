@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="default.xsl"?>
+<model reboot_req="false" >
+<object name="Service" access="readWrite" minEntries="1" maxEntries="1" >
+<pagetitle >
+Example Service
+</pagetitle>
+<description >
+A synthetic page in the shape the device produces, used by the tests.
+</description>
+<parameter name="Enable" access="readWrite" >
+<description >
+Whether the service is enabled
+</description>
+<syntax >
+<boolean >
+</boolean>
+</syntax>
+<value hash="aaaa0001" type="bool" default="true" current="false" >
+</value>
+</parameter>
+<parameter name="ProxyServerPort" access="readWrite" >
+<description >
+Destination port to connect to the SIP server
+</description>
+<syntax >
+<unsignedInt >
+<range minInclusive="0" maxInclusive="65535" >
+</range>
+</unsignedInt>
+</syntax>
+<value hash="aaaa0002" type="input" default="5060" >
+</value>
+</parameter>
+<parameter name="ProxyServerTransport" access="readWrite" >
+<description >
+Transport protocol to connect to SIP server
+</description>
+<syntax >
+<string >
+<enumeration value="UDP" >
+</enumeration>
+<enumeration value="TCP" >
+</enumeration>
+<enumeration value="TLS" >
+</enumeration>
+</string>
+</syntax>
+<value hash="aaaa0003" type="list" default="UDP" >
+</value>
+</parameter>
+<parameter name="X_InboundCallRoute" access="readWrite" >
+<description >
+Where inbound calls on this service are sent
+</description>
+<syntax >
+<string >
+<size maxLength="256" >
+</size>
+</string>
+</syntax>
+<value hash="aaaa0004" type="input" default="ph" current="{(&lt;**1:&gt;(Msp1)):sp1}" >
+</value>
+</parameter>
+<parameter name="AuthUserName" access="readWrite" >
+<description >
+Login name for the service
+</description>
+<syntax >
+<string >
+<size maxLength="64" >
+</size>
+</string>
+</syntax>
+<value hash="aaaa0005" type="input" default="" current="${DSN}_1" >
+</value>
+</parameter>
+<parameter name="AuthPassword" access="readWrite" >
+<description >
+Login password for the service
+</description>
+<syntax >
+<string >
+<size maxLength="64" >
+</size>
+</string>
+</syntax>
+<value hash="aaaa0006" type="input" default="" current="s3cret" >
+</value>
+</parameter>
+<parameter name="CallerIDName" access="readWrite" >
+<description >
+Caller name shown on outbound calls
+</description>
+<syntax >
+<string >
+<size maxLength="16" >
+</size>
+</string>
+</syntax>
+<value hash="aaaa0007" type="input" default="" >
+</value>
+</parameter>
+<parameter name="RegistrationState" access="readOnly" >
+<description >
+Current registration state
+</description>
+<syntax >
+<string >
+</string>
+</syntax>
+<value hash="aaaa0008" type="input" default="" current="Registered" >
+</value>
+</parameter>
+</object>
+</model>

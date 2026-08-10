@@ -1,0 +1,67 @@
+# Two SIP trunks between an OBi and a local PBX (Asterisk, FreePBX,
+# FreeSWITCH, Kamailio -- the OBi does not care which).
+#
+# Why two trunks and not one: the OBi and the PBX see each other as a single
+# IP address, so the PBX cannot tell "a call for the outside world" from "a
+# call for the analogue handset" by looking at where it came from. Encoding
+# the direction in *which trunk* is used removes the ambiguity entirely --
+# the PBX dials one endpoint to get out, another to ring the phone.
+#
+#   SP2  -> outbound: the PBX dials PJSIP/<number>@obi, the OBi sends it on
+#           via SP1 (whatever service SP1 is bound to)
+#   SP3  -> inbound:  the PBX dials PJSIP/201@obi-phone, the OBi rings the
+#           handset on the PHONE port
+#
+# Both trunks are registration-free and authenticated by IP, so no password
+# crosses the LAN. A healthy trunk reads "Registration Not Required" on the
+# device's status page -- if one reads "Service Not Configured" instead, its
+# URI is empty; that field is what brings a registration-less service up.
+#
+# Replace 192.0.2.10 with your PBX's address before using this.
+#
+#   obicfg apply examples/pbx-trunks.toml --dry-run
+#   obicfg apply examples/pbx-trunks.toml
+
+name = "SIP trunks to a local PBX"
+description = "SP2 out to the world, SP3 in to the analogue phone."
+
+[require]
+model = "OBi2"          # OBi200/OBi202/OBi212; prefix match
+
+[settings]
+
+# -- SP2: the PBX's way out -------------------------------------------------
+"sp2.Enable"              = true
+"sp2.X_ServProvProfile"   = "B"          # ITSP Profile B, configured below
+"sp2.X_RegisterEnable"    = false        # IP-authenticated, no registrar
+"sp2.URI"                 = "200"        # the extension the PBX dials as
+"sp2.CallerIDName"        = "PBX"
+"sp2.X_UserAgentPort"     = 5061         # each trunk needs its own SIP port
+"sp2.X_InboundCallRoute"  = "sp1"        # anything arriving here goes out SP1
+
+"itsp.b.sip.ProxyServer"          = "192.0.2.10"
+"itsp.b.sip.ProxyServerPort"      = 5060
+"itsp.b.sip.ProxyServerTransport" = "UDP"
+
+# -- SP3: the PBX's way to the handset --------------------------------------
+"sp3.Enable"              = true
+"sp3.X_ServProvProfile"   = "C"
+"sp3.X_RegisterEnable"    = false
+"sp3.URI"                 = "201"
+"sp3.CallerIDName"        = "Phone"
+"sp3.X_UserAgentPort"     = 5062
+"sp3.X_InboundCallRoute"  = "ph"         # ring the analogue phone
+
+"itsp.c.sip.ProxyServer"          = "192.0.2.10"
+"itsp.c.sip.ProxyServerPort"      = 5060
+"itsp.c.sip.ProxyServerTransport" = "UDP"
+
+# -- The analogue phone -----------------------------------------------------
+# Emergency calls skip the PBX on purpose: if the PBX is down, off, or being
+# upgraded, 911 must still complete. Put the 911 rule first and it is matched
+# before anything else. (Whether your upstream service carries 911 usefully
+# is a separate question -- most VoIP services do not, reliably.)
+"phone.OutboundCallRoute" = "{(911):sp1},{(<**2:>(Msp2)):sp2},{(Mpli):pli}"
+
+[after]
+reboot = false          # service and routing changes take effect immediately
