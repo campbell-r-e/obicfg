@@ -298,6 +298,14 @@ pip install -e '.[dev]'
 pytest
 ```
 
+There is also a hardware sweep, [`tests/live/sweep.sh`](tests/live/sweep.sh),
+which exercises every feature — including writes, profiles, resets and the
+transport probe — against a real device. Every write it makes targets a
+parameter nothing uses, and it finishes by proving the device is
+byte-identical to the backup it took at the start. Read its header before
+running it: it tells you how to check that the scratch targets are inert on
+*your* unit.
+
 Coverage is gated at **100%** and the suite fails below it. That is not
 box-ticking: this tool writes to a telephone and reports success or failure on
 the strength of a read-back, so an untested branch is a branch that could
