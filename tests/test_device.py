@@ -213,7 +213,7 @@ class TestDiscoveryEdges:
 
     def test_wait_for_a_reboot_that_never_completes(self, monkeypatch):
         device = make_device()
-        monkeypatch.setattr(cli_time := __import__("time"), "sleep", lambda _s: None)
+        monkeypatch.setattr(__import__("time"), "sleep", lambda _s: None)
         original_fetch = device.client.fetch
 
         def always_down(path):
@@ -223,7 +223,6 @@ class TestDiscoveryEdges:
 
         device.client.fetch = always_down
         assert device.reboot(wait=True, timeout=0.2) is False
-        assert cli_time is not None
 
     def test_wait_for_a_reboot_that_completes(self, monkeypatch):
         device = make_device()
@@ -243,3 +242,37 @@ class TestDiscoveryEdges:
         assert _is_secret(param("AuthPassword")) is True
         # A checkbox called ShowAccessPointPassword is not a password.
         assert _is_secret(param("ShowAccessPointPassword")) is False
+
+
+class TestDuplicateNames:
+    """A page may repeat a parameter name across <object> blocks."""
+
+    def _device(self):
+        client = FakeClient(pages={"EXAMPLE_SYS_": fixture("EXAMPLE_SYS_.xml")})
+        client.menu = (
+            """<a href="#" onclick="e('EXAMPLE_SYS_.xml')" class="cmenu">Sys</a>"""
+        )
+        return Device(client, Guard(enabled=False))
+
+    def test_a_snapshot_keeps_both(self):
+        # Keying on the bare name kept only the last, so a backup silently
+        # lost rows and no diff could ever see the dropped one change.
+        entries = self._device().snapshot(
+            include_status=True, writable_only=False
+        )["pages"]["EXAMPLE_SYS_"]["parameters"]
+        assert entries["MACAddress"]["value"] == "000000000001"
+        assert entries["Product Information.MACAddress"]["value"] == "000000000002"
+
+    def test_both_are_addressable_by_path(self):
+        device = self._device()
+        assert device.parameter("EXAMPLE_SYS_.MACAddress").hash == "bbbb0001"
+        # The qualified form has to work on a raw page name, not only an alias.
+        assert (
+            device.parameter("EXAMPLE_SYS_.Product Information.MACAddress").hash
+            == "bbbb0003"
+        )
+
+    def test_a_genuinely_missing_page_still_reports_itself(self):
+        device = self._device()
+        with pytest.raises(ResolutionError, match="no page named"):
+            device.parameter("NOPE_.Thing.Sub")

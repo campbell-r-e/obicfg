@@ -914,3 +914,142 @@ class TestSecondAuditFixes:
         monkeypatch.setattr(cli.config_mod, "load_config", dict)
         monkeypatch.setenv("OBI_PORT", "")
         assert cli._device(args).client.port is None
+
+
+class TestThirdAuditFixes:
+    """Regressions for an adversarial code review.
+
+    Two of these were the tool failing at its own stated purpose: a `dump
+    --redact` that wrote plaintext passwords beside the redacted snapshot,
+    and a `probe` that announced "restored" without checking.
+    """
+
+    def test_redacted_dump_does_not_write_unredactable_raw_xml(
+        self, device, capsys, tmp_path
+    ):
+        target = tmp_path / "b"
+        assert run("dump", str(target), "--redact") == 0
+        assert (target / "snapshot.json").exists()
+        assert not list(target.glob("*.xml"))
+        text = out(capsys)
+        assert "raw per-page XML" in text
+        # The secret must not be anywhere in the directory.
+        for path in target.iterdir():
+            assert "s3cret" not in path.read_text()
+
+    def test_an_unredacted_dump_still_warns_about_the_raw_xml(
+        self, device, capsys, tmp_path
+    ):
+        assert run("dump", str(tmp_path / "b"), ) == 0
+        assert "keep it out of public repositories" in out(capsys)
+
+    def test_redact_with_no_raw_is_quiet_about_xml(self, device, capsys, tmp_path):
+        assert run("dump", str(tmp_path / "b"), "--redact", "--no-raw") == 0
+        assert "raw per-page XML" not in out(capsys)
+
+    def test_probe_reports_and_fails_when_it_cannot_restore(
+        self, monkeypatch, capsys
+    ):
+        built = make_device()
+        monkeypatch.setattr(cli, "_device", lambda args: built)
+        run("set", "sp2.CallerIDName=Before")
+        capsys.readouterr()
+
+        real_apply = cli.Device.apply
+        state = {"probes": 0}
+
+        def apply(self, changes, **kwargs):
+            state["probes"] += 1
+            if state["probes"] > 3:  # the restore
+                self.client.deaf_hashes = frozenset({"a0020007"})
+            return real_apply(self, changes, **kwargs)
+
+        monkeypatch.setattr(cli.Device, "apply", apply)
+        assert run("--yes", "probe", "--scratch", "sp2.CallerIDName") == 3
+        text = out(capsys)
+        assert "could NOT be restored" in text
+        assert "restored VS_1_VP_1_L_2_.CallerIDName to 'Before'" not in text
+
+    def test_probe_does_not_call_an_already_correct_value_a_failure(
+        self, monkeypatch, capsys
+    ):
+        built = make_device()
+        monkeypatch.setattr(cli, "_device", lambda args: built)
+        run("set", "sp2.CallerIDName=obicfgtest")
+        capsys.readouterr()
+        # The first probe value is already in place; that is a successful
+        # round-trip, not the firmware rejecting a plain write.
+        assert run("--yes", "probe", "--scratch", "sp2.CallerIDName") == 0
+        assert "FAIL" not in out(capsys)
+
+    @pytest.mark.parametrize(
+        "argv,message",
+        [
+            (["get", "Enable"], "not a parameter path"),
+            (["search", "["], "invalid regular expression"),
+            (["set", "sp2.CallerIDName=@/no/such/file"], "cannot read value from"),
+        ],
+    )
+    def test_input_errors_do_not_escape_as_tracebacks(self, device, capsys, argv, message):
+        assert run(*argv) in (1, 2)
+        assert message in capsys.readouterr().err
+
+    @pytest.mark.parametrize(
+        "var,value,message",
+        [
+            ("OBI_TIMEOUT", "soon", "timeout must be a number"),
+            ("OBI_TIMEOUT", "-1", "greater than zero"),
+            ("OBI_SCHEME", "ftp", "scheme must be http or https"),
+        ],
+    )
+    def test_bad_connection_settings_are_reported_not_raised(
+        self, monkeypatch, capsys, var, value, message
+    ):
+        monkeypatch.setattr(cli.config_mod, "load_config", dict)
+        monkeypatch.setenv("OBI_HOST", "192.0.2.1")
+        monkeypatch.setenv(var, value)
+        assert run("status") == 1
+        assert message in capsys.readouterr().err
+
+    def test_diff_reads_the_device_at_the_snapshots_own_scope(
+        self, device, capsys, tmp_path
+    ):
+        # A wide snapshot compared against a default read of the device used
+        # to report every parameter the default read excludes as deleted.
+        target = tmp_path / "wide"
+        assert run("dump", str(target), "--include-status", "--all", "--no-raw") == 0
+        capsys.readouterr()
+        assert run("diff", str(target)) == 0
+        assert "no differences" in out(capsys)
+
+    def test_a_snapshot_records_its_scope(self, device, capsys, tmp_path):
+        target = tmp_path / "b"
+        run("dump", str(target), "--include-status", "--all", "--no-raw")
+        scope = json.loads((target / "snapshot.json").read_text())["scope"]
+        assert scope == {"include_status": True, "writable_only": False}
+
+
+def test_probe_reports_when_the_original_value_cannot_be_written_back(
+    monkeypatch, capsys
+):
+    """The destructive case: a real device holds values this tool would reject.
+
+    A provisioned or web-UI-set value can exceed the page's declared limit,
+    because it never went through this tool's validation. Probing such a
+    parameter used to leave it holding a test string, with no message and
+    exit 1 from an unhandled error.
+    """
+    built = make_device()
+    # 20 characters, where the fixture declares maxLength 16.
+    built.client.pages["VS_1_VP_1_L_2_"] = built.client.pages[
+        "VS_1_VP_1_L_2_"
+    ].replace(
+        '<value hash="a0020007" type="input" default="" >',
+        '<value hash="a0020007" type="input" default="" current="Front Desk Extension" >',
+    )
+    monkeypatch.setattr(cli, "_device", lambda args: built)
+    assert run("--yes", "probe", "--scratch", "sp2.CallerIDName") == 3
+    text = out(capsys)
+    assert "restore FAILED" in text
+    assert "could NOT be restored" in text
+    assert "'Front Desk Extension'" in text  # tells you what to put back

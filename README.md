@@ -255,10 +255,13 @@ OBi200 running 3.2.2, all three survive intact.
 There is an older form: `POST /result.html?hash=value`, with the value raw in
 the query string. Nothing decodes it, so bytes are stored verbatim — send
 `%20` and you get a literal `%20`. It is available as `--transport query` in
-case a firmware ever ignores the first, and it carries two hard limits: a
-space is not legal in an HTTP request line, and a `#` starts a URL fragment
-and truncates everything after it. `obicfg` rejects such values up front
-rather than letting the device mangle them.
+case a firmware ever ignores the first, and it carries hard limits. A space is not legal in an HTTP request line; a
+`#` starts a URL fragment and truncates everything after it; and an `&` ends
+the assignment, so the tail of the value is read as a **second** parameter and
+written to whatever it happens to name — a write nobody asked for, which the
+read-back on the intended parameter cannot see. `=` and `+` are refused for
+related reasons. `obicfg` rejects all of them up front rather than letting the
+device mangle the value or scatter it.
 
 This is also why the tool speaks HTTP through the standard library rather than
 a friendlier client. A call route like `{(<**1:>(Msp1)):sp1}` is completely

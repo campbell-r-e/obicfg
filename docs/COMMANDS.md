@@ -348,7 +348,7 @@ obicfg dump <DIRECTORY> [--include-status] [--all] [--redact] [--force] [--no-ra
 |---|---|
 | `--include-status` | Also capture live status pages (excluded by default) |
 | `--all` | Include read-only readouts. Noisy — some change every second |
-| `--redact` | Blank passwords, MAC and serial |
+| `--redact` | Blank passwords, MAC and serial in `snapshot.json`. Implies no raw XML — see below |
 | `--force` | Overwrite an existing backup in this directory |
 | `--no-raw` | Write `snapshot.json` only, no per-page XML |
 
@@ -381,8 +381,17 @@ change every second, which would make every diff dirty.
 }
 ```
 
-A dump carries the device's MAC, serial and any stored SIP credentials. Keep
-it out of public repositories, or use `--redact`.
+A dump carries the device's MAC, serial and any stored SIP credentials.
+
+`--redact` masks them in `snapshot.json` and, because the raw per-page XML is
+a byte-for-byte copy of what the device serves and cannot be redacted, skips
+writing it. A redacted dump is therefore safe to share but is **not** a
+complete restore point — take an unredacted one for that, and keep it out of
+public repositories.
+
+`snapshot.json` records the scope it was taken at, so `diff` reads the device
+back the same way. Comparing a wide snapshot against a narrow read of the
+device would otherwise report everything the narrow read excludes as deleted.
 
 ## `diff`
 
@@ -552,8 +561,12 @@ obicfg probe [--scratch <PATH>] [--json]
 
 **This writes to the device.** It sends a plain value, a value containing a
 space, and a value containing `#` to the scratch parameter, reads each back,
-then restores the original. Prompts first unless `-y`. Exit 3 if any case
-fails to round-trip.
+then restores the original — and **verifies the restore**, exiting 3 and
+saying so loudly if the parameter could not be put back. That case is real:
+a value the device already holds may be one this tool would reject (longer
+than the declared maximum, say, because the web UI or a provisioning server
+wrote it), and then it cannot be written back at all. The message names the
+original value so you can restore it by hand.
 
 ```console
 $ obicfg probe

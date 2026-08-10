@@ -113,6 +113,11 @@ class TestCalls:
         assert calls[0].peer == "+15551234567"
         assert (calls[0].from_terminal, calls[0].to_terminal) == ("SP1", "PH")
 
+    def test_the_fixtures_outbound_call_reports_the_far_end(self, calls):
+        # calls[1] is From PH(1001) -> To SP2(+15559876543).
+        assert calls[1].direction == "outbound"
+        assert calls[1].peer == "+15559876543"
+
     def test_ring_and_talk_time_come_from_the_event_gaps(self, calls):
         assert calls[0].answered is True
         assert calls[0].ring_s == 10
@@ -244,14 +249,20 @@ class TestCallTimingEdges:
         assert len(calls[0].events) == 1
         assert calls[0].direction == "outbound"
 
-    def test_the_peer_falls_back_to_the_destination(self):
-        # An outbound call names the far end in the "To" line, not the "From".
+    def test_an_outbound_calls_peer_is_the_number_dialled(self):
+        # The old code took the peer from the "From" line unconditionally, so
+        # every outbound call reported the OBi's own extension as the peer.
+        # The realistic record -- a populated From *and* To -- is the one that
+        # exposes it; an empty From() hides the bug entirely.
         calls = telemetry.parse_calls(
             '<CallHistoryFile><CallHistory date="1/1/2026" time="00:00:00">'
-            '<Event time="00:00:00"><e0>From PH()</e0><e1>To SP1(+15550000001)</e1></Event>'
+            '<Event time="00:00:00"><e0>From PH(1001)</e0>'
+            "<e1>To SP1(+15550000001)</e1></Event>"
             "</CallHistory></CallHistoryFile>"
         )
+        assert calls[0].direction == "outbound"
         assert calls[0].peer == "+15550000001"
+        assert calls[0].from_terminal == "PH"
         assert calls[0].to_terminal == "SP1"
 
     def test_a_call_with_no_events_at_all(self):

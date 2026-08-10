@@ -34,6 +34,7 @@ does that for you.
 from __future__ import annotations
 
 import enum
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -45,10 +46,17 @@ from .errors import AuthError, TransportError, ValidationError
 #: exactly keeps our writes byte-identical to the ones the web UI sends.
 _JS_SAFE = "-_.!~*'()"
 
-#: Characters that cannot survive the query-string transport.
+#: Characters that cannot survive the query-string transport. The last three
+#: are not merely mangled -- '&' ends the assignment, so the remainder of the
+#: value is read as a *second* parameter and written somewhere nobody asked
+#: for, which the read-back on the intended parameter cannot detect.
 _QUERY_HOSTILE = {
     " ": "a space is not legal in an HTTP request line",
     "#": "a '#' starts a URL fragment and truncates everything after it",
+    "&": "an '&' ends this assignment, so the rest of the value would be "
+         "parsed as a second parameter and written to whatever it names",
+    "=": "an '=' makes the split between parameter and value ambiguous",
+    "+": "a '+' may be decoded as a space, silently changing the value",
 }
 
 
@@ -127,7 +135,10 @@ class Client:
         )
 
     def _open(self, url: str, data: bytes | None = None) -> Response:
-        request = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+        # `data is not None`, not `data` -- the query transport posts an empty
+        # body, and truthiness would silently downgrade those writes to GET.
+        method = "POST" if data is not None else "GET"
+        request = urllib.request.Request(url, data=data, method=method)
         request.add_header("User-Agent", "obicfg")
         if data is not None:
             request.add_header("Content-Type", "application/x-www-form-urlencoded")
@@ -145,7 +156,11 @@ class Client:
             raise TransportError(f"{url} returned HTTP {exc.code}") from None
         except urllib.error.URLError as exc:
             raise TransportError(f"cannot reach {self.host}: {exc.reason}") from None
-        except OSError as exc:  # timeouts, resets, and http.client's own errors
+        except (OSError, http.client.HTTPException) as exc:
+            # HTTPException is NOT an OSError subclass. A device that is
+            # rebooting routinely produces IncompleteRead or BadStatusLine,
+            # and those must be retryable transport failures rather than a
+            # traceback out of `reboot --wait`.
             raise TransportError(f"cannot reach {self.host}: {exc}") from None
 
     # -- reads ------------------------------------------------------------

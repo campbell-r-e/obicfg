@@ -334,6 +334,8 @@ def parse_calls(xml: bytes | str, *, limit: int | None = None) -> list:
         start = record.time
         connected_at = None
         ended_at = None
+        from_number = None
+        to_number = None
 
         for event in entry.findall("Event"):
             stamp = event.get("time", "")
@@ -345,11 +347,10 @@ def parse_calls(xml: bytes | str, *, limit: int | None = None) -> list:
                 terminal = _TERMINAL.match(text)
                 if terminal and text.lower().startswith("from"):
                     record.from_terminal = terminal.group(1)
-                    record.peer = terminal.group(2) or record.peer
+                    from_number = terminal.group(2) or from_number
                 elif terminal and text.lower().startswith("to"):
                     record.to_terminal = terminal.group(1)
-                    if not record.peer:
-                        record.peer = terminal.group(2)
+                    to_number = terminal.group(2) or to_number
                 elif "connected" in text.lower():
                     record.connected = True
                     connected_at = connected_at or stamp
@@ -361,6 +362,13 @@ def parse_calls(xml: bytes | str, *, limit: int | None = None) -> list:
             record.direction = (
                 "outbound" if record.from_terminal.upper().startswith("PH") else "inbound"
             )
+        # The peer is the far end -- which is the *destination* on a call the
+        # handset placed. Taking it from the "From" line unconditionally makes
+        # every outbound call report the OBi's own extension as the peer.
+        if record.direction == "outbound":
+            record.peer = to_number or from_number
+        else:
+            record.peer = from_number or to_number
         if connected_at:
             record.ring_s = _elapsed(start, connected_at)
             if ended_at:

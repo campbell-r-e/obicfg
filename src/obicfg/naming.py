@@ -14,6 +14,12 @@ in the tool depends on this table being complete.
 
 from __future__ import annotations
 
+from .errors import UsageError
+
+
+class PathError(UsageError):
+    """A string was not a usable ``<page>.<parameter>`` path."""
+
 #: alias -> page name (no .xml).  Keys are matched case-insensitively.
 ALIASES: dict[str, str] = {
     # Voice services -- the trunks/lines you actually dial through.
@@ -86,7 +92,7 @@ def split_path(path: str) -> tuple[str, str]:
             return ALIASES[alias], path[len(alias) + 1 :]
     page, _, name = path.rpartition(".")
     if not page:
-        raise ValueError(
+        raise PathError(
             f"{path!r} is not a parameter path -- expected <page>.<parameter>, "
             "e.g. sp2.X_InboundCallRoute or VS_1_VP_2_SIP_.ProxyServer"
         )
@@ -94,11 +100,15 @@ def split_path(path: str) -> tuple[str, str]:
 
 
 def resolve_page(name: str, known: list[str]) -> str | None:
-    """Resolve a page alias or (possibly sloppy) page name against ``known``."""
+    """Resolve a page alias or (possibly sloppy) page name against ``known``.
+
+    An alias resolves whether or not the page is in ``known``: the menu is
+    not a complete index (``DM_S_`` and ``callhistory.xml`` are served without
+    appearing in it), and requiring a menu entry made ``show provisioning``
+    fail while ``get provisioning.ConfigURL`` succeeded.
+    """
     if name.lower() in ALIASES:
-        candidate = ALIASES[name.lower()]
-        if candidate in known:
-            return candidate
+        return ALIASES[name.lower()]
     for page in known:
         if page.lower() == name.lower():
             return page

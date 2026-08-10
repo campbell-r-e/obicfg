@@ -32,8 +32,14 @@ def test_aliases_are_case_insensitive():
 
 
 def test_a_path_without_a_parameter_is_rejected():
-    with pytest.raises(ValueError, match="page.*parameter"):
+    # A UsageError, so the CLI exits 2 and prints a message rather than
+    # letting a bare ValueError escape as a traceback.
+    from obicfg.errors import UsageError
+    from obicfg.naming import PathError
+
+    with pytest.raises(PathError, match="page.*parameter"):
         split_path("sp2")
+    assert issubclass(PathError, UsageError)
 
 
 def test_resolve_page_handles_alias_exact_and_sloppy_names():
@@ -44,9 +50,13 @@ def test_resolve_page_handles_alias_exact_and_sloppy_names():
     assert resolve_page("nonsense", KNOWN) is None
 
 
-def test_alias_for_a_page_absent_from_this_model_is_not_resolved():
-    # OBi100s have no Bluetooth pages; the alias must not conjure one.
-    assert resolve_page("bt1", KNOWN) is None
+def test_an_alias_resolves_even_when_the_menu_does_not_list_the_page():
+    # The menu is not a complete index -- DM_S_ and callhistory.xml are served
+    # without appearing in it. Requiring a menu entry made `show provisioning`
+    # fail while `get provisioning.ConfigURL` worked. A page that genuinely
+    # does not exist fails at the fetch, with the device saying so.
+    assert resolve_page("bt1", KNOWN) == "VS_1_X_BT_1_"
+    assert resolve_page("provisioning", KNOWN) == "DM_S_"
 
 
 def test_aliases_for_reports_every_name_pointing_at_a_page():

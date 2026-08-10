@@ -62,7 +62,10 @@ def _shorten(text: str, limit: int = 60) -> str:
 def _read_value(raw: str) -> str:
     """Support ``path=@file`` so huge DigitMap/CallRoute values dodge the shell."""
     if raw.startswith("@"):
-        return Path(raw[1:]).read_text(encoding="utf-8").strip()
+        try:
+            return Path(raw[1:]).read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            raise UsageError(f"cannot read value from {raw[1:]}: {exc}") from None
     return raw
 
 
@@ -79,6 +82,23 @@ def _confirm(prompt: str, assume_yes: bool) -> bool:
         return input(f"{prompt} [y/N] ").strip().lower() in ("y", "yes")
     except (EOFError, KeyboardInterrupt):
         return False
+
+
+def _scheme(value: object) -> str:
+    text = str(value).lower()
+    if text not in ("http", "https"):
+        raise ObiError(f"scheme must be http or https, got {value!r}")
+    return text
+
+
+def _positive_float(value: object) -> float:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ObiError(f"timeout must be a number of seconds, got {value!r}") from None
+    if number <= 0:
+        raise ObiError(f"timeout must be greater than zero, got {number}")
+    return number
 
 
 def _optional_int(value: object) -> int | None:
@@ -111,9 +131,11 @@ def _device(args: argparse.Namespace) -> Device:
         host=str(host),
         username=str(config_mod.resolve("username", args.user, config, "admin")),
         password=config_mod.read_password(args.password, args.password_file, config),
-        scheme=str(config_mod.resolve("scheme", args.scheme, config, "http")),
+        scheme=_scheme(config_mod.resolve("scheme", args.scheme, config, "http")),
         port=_optional_int(config_mod.resolve("port", args.port, config)),
-        timeout=float(config_mod.resolve("timeout", args.timeout, config, 15.0)),
+        timeout=_positive_float(
+            config_mod.resolve("timeout", args.timeout, config, 15.0)
+        ),
         transport=transport,
     )
     guard = Guard.from_config(config.get("guard", {}), enabled=not args.unsafe)
@@ -424,7 +446,20 @@ def cmd_dump(args: argparse.Namespace) -> int:
 
     identity = device.identity()
     names = device.page_names() if args.include_status else device.config_pages()
-    if args.raw:
+
+    # The raw XML is a byte-for-byte copy of what the device serves, so it
+    # cannot be redacted -- it carries the passwords, MAC and serial that
+    # snapshot.json just masked. Writing both under --redact produced the
+    # worst possible combination: a leaky dump, with the warning suppressed
+    # precisely because the user had asked for redaction.
+    write_raw = args.raw and not args.redact
+    if args.raw and args.redact:
+        _out(
+            "note: --redact covers snapshot.json only, so the raw per-page XML "
+            "was not written (it is an unredactable copy of the device's own "
+            "output). Drop --redact to capture it."
+        )
+    if write_raw:
         for name in names:
             (directory / f"{name}.xml").write_bytes(device.client.fetch(f"{name}.xml"))
 
@@ -446,7 +481,7 @@ def cmd_dump(args: argparse.Namespace) -> int:
     )
     count = sum(len(p["parameters"]) for p in snapshot["pages"].values())
     _out(f"wrote {len(snapshot['pages'])} pages, {count} parameters to {directory}")
-    if not args.redact:
+    if write_raw or not args.redact:
         _out(
             "note: this dump contains the device's MAC, serial and any stored "
             "credentials -- keep it out of public repositories, or use --redact"
@@ -472,7 +507,14 @@ def cmd_diff(args: argparse.Namespace) -> int:
         after = _load_snapshot(args.against)
         after_label = args.against
     else:
-        after = _device(args).snapshot()
+        # Read the device at whatever scope the snapshot was taken with, or a
+        # tighter snapshot compared against a default read reports every
+        # parameter it never captured as having vanished.
+        scope = before.get("scope", {})
+        after = _device(args).snapshot(
+            include_status=bool(scope.get("include_status", False)),
+            writable_only=bool(scope.get("writable_only", True)),
+        )
         after_label = "device"
     differences = diff_snapshots(before, after)
     hidden = count_redacted(before) + count_redacted(after)
@@ -739,18 +781,38 @@ def cmd_probe(args: argparse.Namespace) -> int:
     for label, value in probes:
         try:
             changes = device.apply([device.plan([(parameter.path, value)])[0]])
-            ok = changes[0].verified
-            observed = changes[0].observed
+            # A no-op means the value is already in place, which is a
+            # successful round-trip, not a rejection.
+            ok = changes[0].verified or changes[0].noop
+            observed = changes[0].observed if changes[0].applied else value
         except ObiError as exc:
             ok, observed = False, str(exc)
         results.append((label, value, ok, observed))
         _out(f"  {'ok  ' if ok else 'FAIL'} {label:6} {value!r} -> {observed!r}")
 
-    if original == parameter.default:
-        device.reset_to_default([parameter.path])
+    # Restoring is the part that matters. Announcing it without checking is
+    # the exact failure this tool exists to prevent, and a value the device
+    # holds but this tool would reject (too long, say) cannot be written back
+    # at all -- in which case the scratch parameter must not be left holding
+    # a test string quietly.
+    restored = False
+    try:
+        if original == parameter.default:
+            restore = device.reset_to_default([parameter.path])
+        else:
+            restore = device.apply(device.plan([(parameter.path, original)]))
+        restored = all(c.verified or c.noop for c in restore)
+    except ObiError as exc:
+        _out(f"  restore FAILED: {exc}")
+    if restored:
+        _out(f"restored {parameter.path} to {original!r}")
     else:
-        device.apply(device.plan([(parameter.path, original)]))
-    _out(f"restored {parameter.path} to {original!r}")
+        _out(
+            f"  !! {parameter.path} could NOT be restored and may still hold a "
+            f"test value. It was {original!r} before this run. Put it back by "
+            f"hand before doing anything else."
+        )
+        return EXIT_VERIFY
 
     if args.json:
         _out(

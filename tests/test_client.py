@@ -154,13 +154,27 @@ def test_query_transport_sends_braces_unescaped(server):
     assert received[-1]["path"] == f"/result.html?fe7a1009={route}"
 
 
-def test_query_transport_refuses_values_it_cannot_carry(server):
-    httpd, _ = server
+@pytest.mark.parametrize(
+    "value",
+    ["SP3 Service", "a#b", "a&b", "a=b", "a+b", "{x} & {y}", "50% off"],
+)
+def test_query_transport_rejects_anything_it_cannot_carry_intact(server, value):
+    """The property, not the current contents of the hostile-character list.
+
+    Asserting the two entries that used to be in that dict meant adding '&'
+    changed nothing about the test -- and '&' was the dangerous one, because
+    the tail of the value became a second write to a parameter nobody named.
+    """
+    httpd, received = server
     client = _client(httpd, transport=Transport.QUERY)
-    with pytest.raises(ValidationError, match="space"):
-        client.write([("aaaa0007", "SP3 Service")])
-    with pytest.raises(ValidationError, match="fragment"):
-        client.write([("aaaa0007", "a#b")])
+    safe = all(c not in value for c in " #&=+")
+    if safe:
+        client.write([("aaaa0007", value)])
+        assert received[-1]["path"] == f"/result.html?aaaa0007={value}"
+        return
+    with pytest.raises(ValidationError):
+        client.write([("aaaa0007", value)])
+    assert not received, "a rejected value must never reach the wire"
 
 
 def test_paramlist_transport_round_trips_through_two_decodes(server):
@@ -266,3 +280,11 @@ def test_reboot_tolerates_the_connection_dropping(monkeypatch):
 
     monkeypatch.setattr(client._opener, "open", boom)
     client.reboot()
+
+
+def test_the_query_transport_really_does_post(server):
+    # An empty body is falsy; testing truthiness instead of `is not None`
+    # turned every query-transport write into a GET.
+    httpd, received = server
+    _client(httpd, transport=Transport.QUERY).write([("aaaa0001", "true")])
+    assert received[-1]["method"] == "POST"

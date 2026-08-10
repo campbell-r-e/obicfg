@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from typing import Iterable, Iterator
 
 from .client import Client, Transport
-from .errors import ResolutionError, TransportError, VerificationError
+from .errors import (
+    ResolutionError,
+    TransportError,
+    ValidationError,
+    VerificationError,
+)
 from .guard import Guard
 from .model import Page, Parameter, parse_menu, parse_page
 from .naming import resolve_page, split_path
@@ -124,7 +129,17 @@ class Device:
     def parameter(self, path: str, *, refresh: bool = False) -> Parameter:
         """Resolve ``sp2.X_InboundCallRoute`` (or the raw form) to a parameter."""
         page_name, param_name = split_path(path)
-        page = self.page(page_name, refresh=refresh)
+        try:
+            page = self.page(page_name, refresh=refresh)
+        except ResolutionError:
+            # `EXAMPLE_.Product Information.MACAddress` splits at the last dot,
+            # leaving a page name that does not exist. Retry treating the last
+            # two segments as the qualified `Object.Name` form.
+            head, _, tail = page_name.rpartition(".")
+            if not head:
+                raise
+            page = self.page(head, refresh=refresh)
+            param_name = f"{tail}.{param_name}"
         parameter = page.get(param_name)
         if parameter is None:
             near = [
@@ -148,7 +163,12 @@ class Device:
         """
         import re
 
-        regex = re.compile(pattern, re.IGNORECASE)
+        try:
+            regex = re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            raise ValidationError(
+                f"invalid regular expression {pattern!r}: {exc}"
+            ) from None
         for page in self.iter_pages(pages):
             for parameter in page.parameters:
                 haystack = f"{parameter.path} {parameter.description}"
@@ -179,14 +199,31 @@ class Device:
                 value = parameter.value
                 if redact and _is_secret(parameter):
                     value = "<redacted>"
-                entries[parameter.name] = {
+                # A page may repeat a name across <object> blocks (the status
+                # pages do). Keying on the bare name kept only the last, so a
+                # backup silently lost rows and a diff could never see them
+                # change. Qualify the collisions.
+                key = parameter.name
+                if key in entries:
+                    key = f"{parameter.obj}.{parameter.name}"
+                entries[key] = {
                     "hash": parameter.hash,
                     "value": value,
                     "default": parameter.default,
                     "is_default": parameter.is_default,
                 }
             pages[page.name] = {"title": page.title, "parameters": entries}
-        return {"host": self.client.host, "pages": pages}
+        return {
+            "host": self.client.host,
+            # Recorded so `diff` can read the device back at the same scope.
+            # Comparing an --all --include-status snapshot against a default
+            # read of the device reports every excluded parameter as deleted.
+            "scope": {
+                "include_status": include_status,
+                "writable_only": writable_only,
+            },
+            "pages": pages,
+        }
 
     def identity(self) -> dict[str, str]:
         """Model, firmware, MAC and so on.

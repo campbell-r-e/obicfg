@@ -69,12 +69,17 @@ re-issued. Treat every write as production.
 7. **Never reboot without asking.** A reboot drops calls in progress. Check
    `telemetry` for active calls first, and say what you saw. This includes
    `set --reboot`, which reboots as a side effect of a write.
-8. **Redact before sharing.** A dump carries the MAC, serial and any stored SIP
+8. **Redact before sharing.** `dump --redact` masks the snapshot *and* skips
+   the raw XML, which cannot be redacted — so a redacted dump is shareable but
+   is not a full restore point. Take an unredacted dump for the backup in
+   rule 1. A dump carries the MAC, serial and any stored SIP
    credentials; call history is personal data. Both `dump --redact` and
    `telemetry --redact` mask the device serial and MAC, and `telemetry`
-   additionally masks phone numbers — but **neither hides everything**, so
-   read the output before passing it on. Never paste raw call history into a
-   commit, an issue, or a published page.
+   additionally masks phone numbers — but **neither hides everything**. The
+   WAN address stays, and a device name inside an event line
+   (`From 'Front Desk' SP3(300)`) stays. `status --redact` masks the serial
+   and MAC and nothing else. Read the output before passing it on, and never
+   paste raw call history into a commit, an issue, or a published page.
 9. **Never guess a parameter path.** `search` for it, `get` its current value,
    then act. A plausible-looking wrong path is the easiest way to write to the
    wrong service.
@@ -294,7 +299,8 @@ Do **not** retry the identical command. In order:
 2. Check the value against the page: `obicfg show <page> --json` gives
    `options` for enumerations and the declared type.
 3. If the value is legal and still will not stick, try `--transport query`,
-   the older encoding. Note it cannot carry a space or `#`.
+   the older encoding. It cannot carry a space, `#`, `&`, `=` or `+`, and
+   refuses such values rather than mangling them.
 4. If it still fails, report the failure plainly with the observed value.
    Do not describe the setting as changed.
 
