@@ -12,11 +12,25 @@ the only real-time interface the hardware has.
     The idea is not mine. It comes from **obicaller** by Ryan Young,
     https://github.com/YoRyan/obicaller — a public-domain talking caller-ID
     daemon for the OBi200 that announces incoming calls through espeak. That
-    project is archived (November 2022) and is a shell script; no code from it
-    is reused here. The insight worth crediting is that an otherwise
-    unremarkable debug stream is the only live event source these devices
-    have. This script is a Python re-take on that idea, adding relaying,
-    structured output and an exec hook. The name is kept in tribute.
+    project is archived (November 2022) and is a shell script; this is a
+    Python re-take on it.
+
+    Four specifics come straight from that script, and it would be dishonest
+    to present them as findings of mine:
+
+      * the line that actually carries caller ID is
+        ``<7> [SLIC] CID to deliver: ...`` — not something you would guess,
+        and without it nothing is ever announced;
+      * a withheld number arrives as two apostrophes, and reads better as
+        "private caller";
+      * a leading country code is not worth saying out loud;
+      * announcements are worth suppressing overnight. The original speaks
+        only between 08:00 and 22:00, which is the sort of detail that only
+        turns up after living with a thing.
+
+    Reading the digits out individually is its idea too, and correct: espeak
+    given a bare number says "five million five hundred fifty-one
+    thousand...". The name is kept in tribute.
 
 Standard library only, Python 3.6+, so it runs on whatever is already on the
 box that can hear the device — in the case it was written for, an Alpine
@@ -67,6 +81,8 @@ _PRI = re.compile(r"^<(\d+)>\s*(.*)$", re.S)
 # ordinary sentence being promoted to a category.
 _CATEGORY = re.compile(r"^([A-Za-z0-9_]+)\s*:")
 _SP = re.compile(r"\bSP([1-4])\b")
+# The line that actually carries caller ID. Credit: obicaller.
+_CID = re.compile(r"\[SLIC\]\s*CID to deliver:\s*(.*)", re.IGNORECASE)
 # A dialled or presented number: at least three of digits/*/# , optionally +.
 _NUMBER = re.compile(r"\+?[0-9*#]{3,}")
 
@@ -115,6 +131,7 @@ def parse(data, source="", now=None):
         "category": "system",
         "sp": None,
         "call_event": None,
+        "caller": None,
         "number": None,
     }
 
@@ -134,37 +151,117 @@ def parse(data, source="", now=None):
     if service:
         event["sp"] = int(service.group(1))
 
-    lowered = event["message"].lower()
-    for needle, name in CALL_EVENTS:
-        if needle in lowered:
-            event["call_event"] = name
-            break
+    # Caller ID is checked first: it is a ringing event and it carries the
+    # caller, and none of the generic needles below match its wording.
+    caller = _CID.search(event["message"])
+    if caller:
+        event["call_event"] = "ringing"
+        event["caller"] = caller.group(1).strip()
+    else:
+        lowered = event["message"].lower()
+        for needle, name in CALL_EVENTS:
+            if needle in lowered:
+                event["call_event"] = name
+                break
 
-    number = _NUMBER.search(event["message"])
+    number = _NUMBER.search(event["caller"] or event["message"])
     if number:
         event["number"] = number.group(0)
     return event
 
 
+def normalise_caller(caller):
+    """Turn a raw CID payload into something worth saying.
+
+    A withheld number arrives as two apostrophes; a North American number
+    arrives with a country code nobody says out loud. Both: credit obicaller.
+    """
+    if caller is None:
+        return None
+    text = caller.strip().strip(chr(34)).strip()
+    if not text.strip(chr(39)):
+        return "private caller"
+    digits = re.sub(r"[^0-9+]", "", text)
+    if digits.startswith("+1") and len(digits) == 12:
+        digits = digits[2:]
+    elif digits.startswith("1") and len(digits) == 11:
+        digits = digits[1:]
+    digits = digits.lstrip("+")
+    return digits or text.strip(chr(39))
+
+
 def spoken(number):
-    """Digits read one at a time, which is the only way they are intelligible."""
+    """Digits read one at a time, which is the only way they are intelligible.
+
+    Credit: obicaller. A bare number makes espeak say "five million five
+    hundred fifty-one thousand two hundred thirty-four", which is useless to
+    someone listening for a phone number.
+    """
     if not number:
         return "an unknown caller"
-    return " ".join(number.replace("+", ""))
+    text = number.replace("+", "")
+    if not text.isdigit():
+        return text
+    return " ".join(text)
 
 
-def announce(event, voice="en-us"):
-    """Say the caller aloud, if a speech engine is installed."""
+def within_hours(window, now=None):
+    """Is the current hour inside START-END (24h, end exclusive)?
+
+    Credit: obicaller, which speaks only between 08:00 and 22:00. Nobody
+    wants the house told about a robocall at three in the morning.
+    """
+    if not window:
+        return True
+    start, _, end = window.partition("-")
+    try:
+        start, end = int(start), int(end)
+    except ValueError:
+        return True
+    hour = time.localtime().tm_hour if now is None else now
+    if start <= end:
+        return start <= hour < end
+    return hour >= start or hour < end          # a window across midnight
+
+
+def announce(event, voice="en-us", amplitude=200, speed=140, player="aplay"):
+    """Say the caller aloud, if a speech engine is installed.
+
+    Rendered to a WAV on stdout and piped to a player rather than letting
+    espeak open the sound device itself. espeak's own output path is the
+    first thing to break on a machine with an unusual ALSA setup, and this
+    way the player decides where the audio goes. Credit: obicaller does the
+    same, for what I assume was the same reason.
+    """
     engine = shutil.which("espeak-ng") or shutil.which("espeak")
     if not engine:
         return False
-    text = "Call from %s" % spoken(event.get("number"))
+    caller = normalise_caller(event.get("caller"))
+    if caller is None:
+        caller = event.get("number")
+    text = "Call from %s" % (
+        caller if caller == "private caller" else spoken(caller)
+    )
+    speak = [engine, "-v", voice, "-a", str(amplitude), "-s", str(speed), text]
+    play = shutil.which(player) if player else None
     try:
-        subprocess.Popen(
-            [engine, "-v", voice, text],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if play:
+            speaker = subprocess.Popen(
+                speak + ["--stdout"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+            subprocess.Popen(
+                [play, "-q"],
+                stdin=speaker.stdout,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            speaker.stdout.close()
+        else:
+            subprocess.Popen(
+                speak, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
         return True
     except OSError:
         return False
@@ -217,6 +314,17 @@ def main(argv=None):
     parser.add_argument("--say", action="store_true",
                         help="announce incoming callers aloud via espeak")
     parser.add_argument("--voice", default="en-us", help="espeak voice for --say")
+    parser.add_argument("--amplitude", type=int, default=200, metavar="0-200",
+                        help="espeak loudness for --say (default 200, its maximum)")
+    parser.add_argument("--speed", type=int, default=140, metavar="WPM",
+                        help="speaking rate for --say (default 140; espeak's own "
+                             "175 is too fast for a number read aloud)")
+    parser.add_argument("--player", default="aplay",
+                        help="command that plays a WAV on stdin (default aplay); "
+                             "pass an empty string to let espeak open the device")
+    parser.add_argument("--say-between", default="8-22", metavar="START-END",
+                        help="only speak between these hours, 24h, end exclusive "
+                             "(default 8-22). Empty string to speak at any hour)")
     parser.add_argument("--forward", action="append", default=[], metavar="HOST:PORT",
                         help="relay every datagram here too; repeatable. Use this "
                              "when something else already wants the stream -- the "
@@ -307,8 +415,10 @@ def main(argv=None):
             if handle:
                 handle.write(line + "\n")
 
-            if args.say and event["call_event"] in ANNOUNCE:
-                announce(event, args.voice)
+            if (args.say and event["call_event"] in ANNOUNCE
+                    and within_hours(args.say_between)):
+                announce(event, args.voice, args.amplitude, args.speed,
+                         args.player)
             if args.hook and event["call_event"]:
                 run_hook(args.hook, event)
     except KeyboardInterrupt:

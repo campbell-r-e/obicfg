@@ -278,3 +278,112 @@ class TestExcludes:
         _, err = proc.communicate(timeout=20)
         assert proc.returncode == 2
         assert "bad --exclude pattern" in err
+
+
+class TestCallerIDAndSpeech:
+    """Caller ID, and the announcement built from it.
+
+    The pattern, the withheld-number spelling, the country-code trim, the
+    digit-by-digit reading and the overnight quiet window are all obicaller's
+    (see the acknowledgement in the script). They are tested here because
+    each one is load-bearing: without the first, nothing is ever announced.
+    """
+
+    def test_the_slic_line_is_what_carries_caller_id(self, obicaller):
+        event = obicaller.parse(b"<7> [SLIC] CID to deliver: '+17655551234'", now=0)
+        assert event["call_event"] == "ringing"
+        assert event["caller"] == "'+17655551234'"
+        assert event["number"] == "+17655551234"
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("'+17655551234'", "7655551234"),   # country code not said aloud
+            ("'17655551234'", "7655551234"),
+            ("'5551234'", "5551234"),
+            ("''", "private caller"),           # withheld
+            ("", "private caller"),
+            ("'JOHN SMITH'", "JOHN SMITH"),     # a name, not a number
+        ],
+    )
+    def test_normalise_caller(self, obicaller, raw, expected):
+        assert obicaller.normalise_caller(raw) == expected
+
+    def test_normalise_of_nothing(self, obicaller):
+        assert obicaller.normalise_caller(None) is None
+
+    def test_digits_are_spaced_but_names_are_not(self, obicaller):
+        assert obicaller.spoken("7655551234") == "7 6 5 5 5 5 1 2 3 4"
+        assert obicaller.spoken("JOHN SMITH") == "JOHN SMITH"
+        assert obicaller.spoken(None) == "an unknown caller"
+
+    @pytest.mark.parametrize(
+        "window,hour,expected",
+        [
+            ("8-22", 3, False),    # the middle of the night
+            ("8-22", 8, True),
+            ("8-22", 21, True),
+            ("8-22", 22, False),   # end is exclusive
+            ("22-8", 3, True),     # a window that crosses midnight
+            ("22-8", 14, False),
+            ("", 3, True),         # disabled
+            ("nonsense", 3, True),
+        ],
+    )
+    def test_quiet_hours(self, obicaller, window, hour, expected):
+        assert obicaller.within_hours(window, now=hour) is expected
+
+    def test_announce_renders_and_pipes_to_a_player(self, obicaller, tmp_path, monkeypatch):
+        calls = []
+
+        class FakePopen:
+            def __init__(self, args, **kwargs):
+                calls.append(args)
+                self.stdout = open(tmp_path / "sink", "w+b")
+
+        monkeypatch.setattr(obicaller.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(obicaller.shutil, "which",
+                            lambda name: "/usr/bin/" + name)
+        event = obicaller.parse(b"<7> [SLIC] CID to deliver: '+17655551234'", now=0)
+        assert obicaller.announce(event, amplitude=200, speed=140) is True
+        spoken = " ".join(calls[0])
+        assert "Call from 7 6 5 5 5 5 1 2 3 4" in spoken
+        assert "-a 200" in spoken and "-s 140" in spoken
+        assert "--stdout" in spoken
+        assert calls[1][0].endswith("aplay")
+
+    def test_announce_falls_back_when_no_player_exists(self, obicaller, monkeypatch):
+        calls = []
+
+        class FakePopen:
+            def __init__(self, args, **kwargs):
+                calls.append(args)
+                self.stdout = None
+
+        monkeypatch.setattr(obicaller.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(
+            obicaller.shutil, "which",
+            lambda name: "/usr/bin/espeak-ng" if "espeak" in name else None,
+        )
+        event = obicaller.parse(b"<7> [SLIC] CID to deliver: '5551234'", now=0)
+        assert obicaller.announce(event) is True
+        assert len(calls) == 1                 # espeak opens the device itself
+        assert "--stdout" not in calls[0]
+
+    def test_a_withheld_number_is_announced_as_such(self, obicaller, monkeypatch):
+        calls = []
+
+        class FakePopen:
+            def __init__(self, args, **kwargs):
+                calls.append(args)
+                self.stdout = None
+
+        monkeypatch.setattr(obicaller.subprocess, "Popen", FakePopen)
+        monkeypatch.setattr(obicaller.shutil, "which",
+                            lambda name: "/usr/bin/espeak-ng" if "espeak" in name else None)
+        obicaller.announce(obicaller.parse(b"<7> [SLIC] CID to deliver: ''", now=0))
+        assert "Call from private caller" in " ".join(calls[0])
+
+    def test_no_speech_engine_is_not_a_crash(self, obicaller, monkeypatch):
+        monkeypatch.setattr(obicaller.shutil, "which", lambda name: None)
+        assert obicaller.announce({"caller": "'5551234'"}) is False

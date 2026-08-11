@@ -50,6 +50,9 @@ SEVERITIES = (
 _PRI = re.compile(r"^<(\d+)>\s*(.*)$", re.S)
 _CATEGORY = re.compile(r"^([A-Za-z0-9_]+)\s*:")
 _SP = re.compile(r"\bSP([1-4])\b")
+#: The line that actually carries caller ID. Credit: obicaller -- this is not
+#: something you would guess, and without it nothing is ever announced.
+_CID = re.compile(r"\[SLIC\]\s*CID to deliver:\s*(.*)", re.IGNORECASE)
 _NUMBER = re.compile(r"[+*#0-9][*#0-9]{2,}")
 
 #: Checked in order, so anything that contains a shorter needle must come
@@ -90,6 +93,8 @@ class Event:
     category: str = "system"
     sp: int | None = None
     call_event: str | None = None
+    #: The raw CID payload, when the line carried one.
+    caller: str | None = None
     number: str | None = None
 
     def to_dict(self) -> dict:
@@ -147,13 +152,20 @@ def parse_line(data: bytes, source: str = "", received_at: float | None = None) 
     if service:
         event.sp = int(service.group(1))
 
-    lowered = event.message.lower()
-    for needle, name in _CALL_EVENTS:
-        if needle in lowered:
-            event.call_event = name
-            break
+    # Caller ID first: it is a ringing event and it carries the caller, and
+    # none of the generic needles match its wording.
+    caller = _CID.search(event.message)
+    if caller:
+        event.call_event = "ringing"
+        event.caller = caller.group(1).strip()
+    else:
+        lowered = event.message.lower()
+        for needle, name in _CALL_EVENTS:
+            if needle in lowered:
+                event.call_event = name
+                break
 
-    number = _NUMBER.search(event.message)
+    number = _NUMBER.search(event.caller or event.message)
     if number:
         event.number = number.group(0)
     return event

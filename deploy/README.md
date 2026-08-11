@@ -65,6 +65,70 @@ device's syslog feature rather than to this script, but it is a real
 consequence and worth a moment's thought on a shared network. `--calls-only`
 narrows what is logged; omitting `--log` keeps it out of a file entirely.
 
+## Speaking the caller ID aloud
+
+```sh
+obicaller.py --port 5515 --say --amplitude 200 --speed 140 --say-between 8-22
+```
+
+Caller ID arrives on a line of its own — `<7> [SLIC] CID to deliver: '+1555…'`
+— which none of the generic call wording matches, so this is the pattern that
+makes an announcement possible at all. A withheld number comes through as two
+apostrophes and is read as "private caller". Digits are spoken one at a time,
+because espeak given a bare number says "five million five hundred fifty-one
+thousand…". `--say-between` suppresses announcements overnight; the default
+8–22 is the original's. All of that is obicaller's work, not mine.
+
+Speech is rendered to a WAV and piped to `aplay` rather than letting espeak
+open the sound device, so the player decides where the audio goes. On a
+minimal install you may need the ALSA tools and an unmuted mixer:
+
+```sh
+apk add alsa-utils          # or: dnf install alsa-utils
+amixer sset Master 85% unmute
+amixer sset Speaker 85% unmute
+alsactl store               # keep it across reboots
+```
+
+## Keeping a dead cloud's traffic off the internet
+
+The device keeps reaching for the retired OBiTALK service: `root.pnn.obihai.com`
+(which Poly left resolving to `127.0.0.1`), plus `prov.obitalk.com` and
+`devpfs.obitalk.com`, which still resolve to live CloudFront addresses. None of
+it can succeed. A local resolver answers the lot without going out:
+
+```
+# dnsmasq
+address=/obihai.com/127.0.0.1
+address=/obihai.com/::1
+address=/obitalk.com/127.0.0.1
+address=/obitalk.com/::1
+```
+
+Both address families matter: an `address=` line covers A only, and AAAA
+falls through to upstream — which is exactly how `devpfs.obitalk.com` kept
+leaking after the first attempt.
+
+Then point the ATA at that resolver, keeping a second one as fallback, and
+reboot (the WAN page needs it):
+
+```sh
+obicfg set wan.DNSServer1=<resolver> wan.DNSServer2=<router>
+obicfg reboot --wait
+```
+
+> **This does not touch Google Voice.** A GV-provisioned OBi reaches
+> `obihai.sip.google.com` and `obihai.telephony.goog` — under `google.com` and
+> `.goog`, not `obihai.com`. Check yours first with
+> `obicfg get itsp.a.sip.ProxyServer itsp.a.sip.OutboundProxy`, and confirm
+> the service still reads "Connected" after the reboot.
+
+Worth knowing before you bother: measured on a real device, the ATA issues
+only **8 DNS queries in the ~20 seconds after boot** and then caches. The
+9-per-second syslog line is it *retrying the connection*, not re-resolving. So
+this stops a small trickle of pointless outbound DNS and connection attempts,
+not a flood.
+
 ## Storing events in PostgreSQL
 
 `contrib/obi-syslog-pg.py` reads the JSON lines `obicaller.py --json` writes

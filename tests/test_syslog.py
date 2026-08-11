@@ -125,3 +125,39 @@ class TestSetupAdvice:
         # They are strings for a human to read and run, deliberately: enabling
         # the feed changes device behaviour and exposes call metadata.
         assert all(isinstance(c, str) for c in commands)
+
+
+class TestCallerID:
+    """The line that actually carries caller ID.
+
+    Credit for the pattern: obicaller. Without it none of the generic call
+    needles match, so a ringing phone produced no event at all.
+    """
+
+    def test_a_caller_id_line_is_a_ringing_event(self):
+        event = syslog.parse_line(b"<7> [SLIC] CID to deliver: '+17655551234'")
+        assert event.call_event == "ringing"
+        assert event.caller == "'+17655551234'"
+        assert event.number == "+17655551234"
+
+    def test_a_withheld_number(self):
+        event = syslog.parse_line(b"<7> [SLIC] CID to deliver: ''")
+        assert event.call_event == "ringing"
+        assert event.caller == "''"
+        assert event.number is None
+
+    def test_a_name_rather_than_a_number(self):
+        event = syslog.parse_line(b"<7> [SLIC] CID to deliver: 'JOHN SMITH'")
+        assert event.call_event == "ringing"
+        assert event.caller == "'JOHN SMITH'"
+
+    def test_the_number_is_taken_from_the_caller_not_the_rest_of_the_line(self):
+        # "[SLIC]" and any trailing counters must not be mistaken for a number.
+        event = syslog.parse_line(b"<7> [SLIC] CID to deliver: '5551234'")
+        assert event.number == "5551234"
+
+    def test_lines_without_caller_id_still_classify_normally(self):
+        assert syslog.parse_line(b"<6> Call Ended").call_event == "ended"
+
+    def test_to_dict_includes_the_caller(self):
+        assert "caller" in syslog.parse_line(b"<6> Call Ended").to_dict()
