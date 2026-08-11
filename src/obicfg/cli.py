@@ -782,9 +782,17 @@ def cmd_listen(args: argparse.Namespace) -> int:
     if not args.json:
         _out(f"listening on {listener.address[0]}:{listener.address[1]} (Ctrl-C to stop)")
     deadline = time.time() + args.seconds if args.seconds else None
-    pattern = re.compile(args.filter, re.IGNORECASE) if args.filter else None
+    try:
+        pattern = re.compile(args.filter, re.IGNORECASE) if args.filter else None
+        excludes = [re.compile(p, re.IGNORECASE) for p in args.exclude]
+        if not args.no_default_exclude:
+            excludes.extend(syslog_mod.DEFAULT_EXCLUDES)
+    except re.error as exc:
+        raise UsageError(f"invalid regular expression: {exc}") from None
     try:
         for event in syslog_mod.events(listener, count=args.count, deadline=deadline):
+            if any(x.search(event.raw) for x in excludes):
+                continue
             if args.calls_only and not event.call_event:
                 continue
             if pattern and not pattern.search(event.raw):
@@ -1028,6 +1036,11 @@ def build_parser() -> argparse.ArgumentParser:
     listen.add_argument("--calls-only", action="store_true",
                         help="only lines that mark a point in a call's life")
     listen.add_argument("--filter", metavar="REGEX", help="only lines matching this")
+    listen.add_argument("--exclude", action="append", default=[], metavar="REGEX",
+                        help="drop lines matching this; repeatable. The OBiTALK "
+                             "retry chatter is dropped by default")
+    listen.add_argument("--no-default-exclude", action="store_true",
+                        help="keep the OBiTALK retry chatter")
     listen.add_argument("--count", type=int, metavar="N", help="stop after N events")
     listen.add_argument("--seconds", type=float, metavar="S", help="stop after S seconds")
     listen.add_argument("--level", type=int, default=7,

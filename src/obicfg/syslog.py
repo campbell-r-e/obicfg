@@ -69,6 +69,13 @@ _CALL_EVENTS = (
 )
 
 
+#: Dropped by default. A unit whose OBiTALK provisioning is gone retries the
+#: lookup forever -- measured at ~9.5 datagrams a second on a real device,
+#: every one identical. It is not a fault and there is nothing to do about it;
+#: it is simply not worth carrying.
+DEFAULT_EXCLUDES = (re.compile(r"resolving root\.pnn\.obihai\.com", re.IGNORECASE),)
+
+
 @dataclass
 class Event:
     """One syslog datagram, parsed."""

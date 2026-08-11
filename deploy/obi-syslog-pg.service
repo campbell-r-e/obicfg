@@ -1,0 +1,35 @@
+# Receive OBi syslog and store it in PostgreSQL.
+#
+# Two processes joined by a pipe: obicaller.py knows UDP and OBi log formats,
+# obi-syslog-pg.py knows a database. Either can be changed without the other.
+#
+#   install -D -m755 contrib/obicaller.py      /opt/obicaller/obicaller.py
+#   install -D -m755 contrib/obi-syslog-pg.py  /opt/obicaller/obi-syslog-pg.py
+#   install -D -m644 deploy/obi-syslog-pg.service /etc/systemd/system/
+#   systemctl daemon-reload && systemctl enable --now obi-syslog-pg
+#
+# Credentials live in /etc/obi-syslog-pg.env (mode 600), in libpq's own
+# variables, so they never appear in a command line or in `ps`.
+
+[Unit]
+Description=OBi syslog events into PostgreSQL
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/obi-syslog-pg.env
+Environment=OBICALLER_PORT=5515
+ExecStart=/bin/sh -c '/usr/bin/python3 /opt/obicaller/obicaller.py \
+    --port ${OBICALLER_PORT} --json \
+  | /usr/bin/python3 /opt/obicaller/obi-syslog-pg.py'
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

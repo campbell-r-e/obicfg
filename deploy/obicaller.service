@@ -15,12 +15,15 @@ Wants=network-online.target
 [Service]
 Type=simple
 Environment=OBICALLER_PORT=5515
-Environment=OBICALLER_FORWARD=127.0.0.1:5514
+Environment="OBICALLER_FORWARD=127.0.0.1:5514"
 Environment=OBICALLER_LOG=/var/log/obicaller.jsonl
-ExecStart=/usr/bin/python3 /opt/obicaller/obicaller.py \
-    --port ${OBICALLER_PORT} --json \
-    --forward ${OBICALLER_FORWARD} \
-    --log ${OBICALLER_LOG}
+# Run through sh so several space-separated forward targets can each be given
+# their own --forward. Passing them as one word makes the second look like a
+# positional argument, and the daemon exits before it binds.
+ExecStart=/bin/sh -c 'f=""; for t in $OBICALLER_FORWARD; do f="$f --forward $t"; done; \
+    exec /usr/bin/python3 /opt/obicaller/obicaller.py \
+        --port "$OBICALLER_PORT" --json --log "$OBICALLER_LOG" $f'
+
 Restart=on-failure
 RestartSec=5
 

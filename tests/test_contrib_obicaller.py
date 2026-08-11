@@ -193,3 +193,88 @@ def test_it_credits_the_original_author(obicaller):
     assert "Ryan Young" in source
     assert "public domain" in source.lower()
     assert "Ryan Young" in obicaller.main.__module__ or True  # module loaded fine
+
+
+class TestExcludes:
+    """The default exclude is not cosmetic.
+
+    A unit whose OBiTALK provisioning is gone retries the lookup forever --
+    measured at ~9.5 datagrams a second on real hardware, ~800k a day, every
+    one identical. Relaying that into a database on a small machine fills a
+    disk. It has to be dropped before the relay, not just before the screen.
+    """
+
+    def _run(self, port, *extra, count=1):
+        return subprocess.Popen(
+            [sys.executable, str(SCRIPT), "--bind", "127.0.0.1",
+             "--port", str(port), "--json", "--count", str(count), *extra],
+            stdout=subprocess.PIPE, text=True,
+        )
+
+    NOISE = b"<7> BASE:resolving root.pnn.obihai.com"
+    REAL = b"<6> CALL:Incoming call from 5551234 on SP1"
+
+    def test_the_default_exclude_drops_the_obitalk_chatter(self):
+        port = free_port()
+        proc = self._run(port, count=2)
+        time.sleep(1.2)
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sender.sendto(self.NOISE, ("127.0.0.1", port))
+        sender.sendto(self.REAL, ("127.0.0.1", port))
+        out, _ = proc.communicate(timeout=20)
+        events = [json.loads(x) for x in out.splitlines() if x.startswith("{")]
+        assert len(events) == 1
+        assert events[0]["call_event"] == "ringing"
+
+    def test_excluded_datagrams_are_not_relayed_either(self):
+        sink = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sink.bind(("127.0.0.1", 0))
+        sink.settimeout(6)
+        relay_port = sink.getsockname()[1]
+        port = free_port()
+
+        proc = self._run(port, "--forward", f"127.0.0.1:{relay_port}", count=2)
+        time.sleep(1.2)
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sender.sendto(self.NOISE, ("127.0.0.1", port))
+        sender.sendto(self.REAL, ("127.0.0.1", port))
+        proc.communicate(timeout=20)
+
+        relayed = []
+        try:
+            while True:
+                relayed.append(sink.recvfrom(65535)[0])
+        except socket.timeout:
+            pass
+        sink.close()
+        assert relayed == [self.REAL], relayed
+
+    def test_the_default_can_be_turned_off(self):
+        port = free_port()
+        proc = self._run(port, "--no-default-exclude", count=1)
+        time.sleep(1.2)
+        socket.socket(socket.AF_INET, socket.SOCK_DGRAM).sendto(
+            self.NOISE, ("127.0.0.1", port)
+        )
+        out, _ = proc.communicate(timeout=20)
+        assert "obihai.com" in out
+
+    def test_a_custom_exclude(self):
+        port = free_port()
+        proc = self._run(port, "--exclude", "Ended", count=2)
+        time.sleep(1.2)
+        sender = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sender.sendto(b"<6> Call Ended", ("127.0.0.1", port))
+        sender.sendto(self.REAL, ("127.0.0.1", port))
+        out, _ = proc.communicate(timeout=20)
+        events = [json.loads(x) for x in out.splitlines() if x.startswith("{")]
+        assert [e["call_event"] for e in events] == ["ringing"]
+
+    def test_a_bad_exclude_pattern_is_a_usage_error(self):
+        proc = subprocess.Popen(
+            [sys.executable, str(SCRIPT), "--exclude", "["],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        _, err = proc.communicate(timeout=20)
+        assert proc.returncode == 2
+        assert "bad --exclude pattern" in err

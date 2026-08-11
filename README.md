@@ -135,6 +135,10 @@ it, use [`contrib/obicaller.py`](contrib/obicaller.py) — a standalone,
 dependency-free daemon that relays each datagram on to the existing consumer
 while announcing callers, logging, or running a hook. Service units and deployment notes are in [`deploy/`](deploy/).
 
+`contrib/obi-syslog-pg.py` will store the stream in PostgreSQL, loading it
+with `COPY` through `psql` so no database driver is needed. See
+[`deploy/`](deploy/).
+
 The idea of using this stream as a live event source is not mine: it comes
 from [obicaller](https://github.com/YoRyan/obicaller) by Ryan Young, a
 public-domain talking caller-ID daemon. No code is reused; the insight is

@@ -65,6 +65,52 @@ device's syslog feature rather than to this script, but it is a real
 consequence and worth a moment's thought on a shared network. `--calls-only`
 narrows what is logged; omitting `--log` keeps it out of a file entirely.
 
+## Storing events in PostgreSQL
+
+`contrib/obi-syslog-pg.py` reads the JSON lines `obicaller.py --json` writes
+and loads them with `COPY`. It shells out to `psql` rather than importing a
+driver, so **no Python database package is needed** — which matters on a box
+where you would rather not install one.
+
+```sh
+install -D -m755 contrib/obicaller.py     /opt/obicaller/obicaller.py
+install -D -m755 contrib/obi-syslog-pg.py /opt/obicaller/obi-syslog-pg.py
+install -D -m644 deploy/obi-syslog-pg.service /etc/systemd/system/
+
+# credentials in libpq's own variables, mode 600, never on a command line
+printf 'PGHOST=127.0.0.1\nPGDATABASE=obi\nPGUSER=obi\nPGPASSWORD=...\n' \
+  | install -m600 /dev/stdin /etc/obi-syslog-pg.env
+
+set -a; . /etc/obi-syslog-pg.env; set +a
+python3 /opt/obicaller/obi-syslog-pg.py --create     # table and indexes
+systemctl daemon-reload && systemctl enable --now obi-syslog-pg
+```
+
+If the database is on a different host from the listener, have the listener
+`--forward` to it and run this pipeline there. On PostgreSQL's default Fedora
+configuration a TCP connection uses ident auth, so a password login needs a
+`pg_hba.conf` rule — scope it to the one database and user over loopback, and
+put it **above** the generic `host all all` line, since pg_hba matches
+top-down and first match wins.
+
+> **`source` is whoever sent the datagram, not necessarily the ATA.** Behind a
+> relay it is the relay's address, because that is what the socket reports.
+> With one device that is harmless; with several, either point them at
+> separate ports or key on something in the message.
+
+Some useful queries:
+
+```sql
+-- recent calls
+SELECT received_at, sp, call_event, number FROM syslog_event
+ WHERE call_event IS NOT NULL ORDER BY received_at DESC LIMIT 20;
+
+-- registration flapping, per service, by hour
+SELECT date_trunc('hour', received_at) AS hour, sp, count(*)
+  FROM syslog_event WHERE call_event IN ('registered','unregistered')
+ GROUP BY 1, 2 ORDER BY 1 DESC;
+```
+
 ## Check it
 
 ```sh

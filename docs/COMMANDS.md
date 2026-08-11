@@ -550,6 +550,8 @@ obicfg listen [--json] [--bind ADDR] [--listen-port PORT] [--calls-only]
 | `--listen-port` | UDP port to listen on (default `5514`... see below; `514` needs root). Named to avoid colliding with the global `--port`, which is the device's admin port |
 | `--calls-only` | Only lines that mark a point in a call's life |
 | `--filter` | Only lines matching this regular expression |
+| `--exclude` | Drop lines matching this; repeatable. See the note below |
+| `--no-default-exclude` | Keep the OBiTALK retry chatter that is dropped by default |
 | `--count` / `--seconds` | Stop after N events, or S seconds |
 | `--setup` | Print the commands that would point the device here, and exit. Runs nothing |
 
@@ -585,6 +587,16 @@ Undo it with `obicfg unset admin.Server`.
 `call_event` is one of `ringing`, `connected`, `ended`, `registered`,
 `unregistered`, `registration_failed`, or `null` for everything else. Lines
 that cannot be classified are still emitted, with `raw` intact.
+
+**Expect noise, and expect a lot of it.** A unit whose OBiTALK provisioning is
+gone retries the lookup forever. Measured on a real OBi200: **287 datagrams in
+30 seconds — about 9.5 a second, some 800,000 a day — of which 286 were the
+identical line** `BASE:resolving root.pnn.obihai.com`. All of it at severity 7,
+the same severity as everything else the device emits, so turning the level
+down silences the useful events too. That is why the chatter is dropped by
+default, and why `--exclude` drops a datagram *before* it is forwarded rather
+than merely before it is printed: relaying 800,000 rows a day into a database
+on a small machine fills a disk.
 
 **A device sends syslog to one address only.** If something already listens
 for it, run [`contrib/obicaller.py`](../contrib/obicaller.py) instead — a

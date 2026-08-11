@@ -89,6 +89,12 @@ CALL_EVENTS = (
 #: Events worth interrupting a human for.
 ANNOUNCE = ("ringing",)
 
+#: Dropped unless --no-default-exclude. An OBi whose OBiTALK provisioning is
+#: gone retries the lookup forever: measured at ~9.5 datagrams a second, or
+#: some 800,000 a day, all identical and all useless. Relaying that into a
+#: database on a small machine is how you fill a disk by Tuesday.
+DEFAULT_EXCLUDES = (r"resolving root\.pnn\.obihai\.com",)
+
 
 def parse(data, source="", now=None):
     """Parse one datagram into a dict.
@@ -215,6 +221,12 @@ def main(argv=None):
                         help="relay every datagram here too; repeatable. Use this "
                              "when something else already wants the stream -- the "
                              "device can only send to one address")
+    parser.add_argument("--exclude", action="append", default=[], metavar="REGEX",
+                        help="drop datagrams matching this, before logging AND "
+                             "before forwarding; repeatable")
+    parser.add_argument("--no-default-exclude", action="store_true",
+                        help="keep the OBiTALK retry chatter that is dropped by "
+                             "default (see DEFAULT_EXCLUDES)")
     parser.add_argument("--exec", dest="hook", metavar="CMD",
                         help="run CMD per event, with OBI_* set in its environment")
     parser.add_argument("--log", metavar="FILE", help="append output to FILE as well")
@@ -239,6 +251,14 @@ def main(argv=None):
               file=sys.stderr)
         return 1
 
+    patterns = list(args.exclude)
+    if not args.no_default_exclude:
+        patterns.extend(DEFAULT_EXCLUDES)
+    try:
+        excludes = [re.compile(p, re.IGNORECASE) for p in patterns]
+    except re.error as exc:
+        parser.error("bad --exclude pattern: %s" % exc)
+
     relay = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if targets else None
     handle = open(args.log, "a", buffering=1) if args.log else None
 
@@ -255,6 +275,13 @@ def main(argv=None):
             except socket.timeout:
                 continue
             seen += 1
+
+            # Excluded before anything else, including the relay: the point is
+            # to keep the noise off the network and out of the other
+            # consumer's storage, not merely off our own screen.
+            text = data.decode("utf-8", "replace")
+            if any(pattern.search(text) for pattern in excludes):
+                continue
 
             # Relay first, and never let a relay failure cost us the event:
             # the other consumer being down is not our problem to escalate.

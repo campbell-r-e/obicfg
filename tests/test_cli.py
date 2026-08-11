@@ -1177,3 +1177,36 @@ class TestListen:
         monkeypatch.delenv("OBI_HOST", raising=False)
         assert run("listen", "--setup") == 0
         assert "<your address>" in out(capsys)
+
+
+class TestListenExcludes:
+    def _prepared(self, monkeypatch, *payloads):
+        return TestListen()._prepared(monkeypatch, *payloads)
+
+    NOISE = b"<7> BASE:resolving root.pnn.obihai.com"
+    REAL = b"<6> CALL:Incoming call from 5551234 on SP1"
+
+    def test_the_obitalk_chatter_is_dropped_by_default(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, self.NOISE, self.REAL)
+        assert run("listen", "--bind", "127.0.0.1", "--seconds", "15",
+                   "--count", "2", "--json") == 0
+        events = [json.loads(x) for x in out(capsys).splitlines() if x.startswith("{")]
+        assert len(events) == 1 and events[0]["call_event"] == "ringing"
+
+    def test_it_can_be_kept(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, self.NOISE)
+        assert run("listen", "--bind", "127.0.0.1", "--seconds", "15",
+                   "--count", "1", "--json", "--no-default-exclude") == 0
+        assert "obihai.com" in out(capsys)
+
+    def test_a_custom_exclude(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, b"<6> Call Ended", self.REAL)
+        assert run("listen", "--bind", "127.0.0.1", "--seconds", "15",
+                   "--count", "2", "--json", "--exclude", "Ended") == 0
+        events = [json.loads(x) for x in out(capsys).splitlines() if x.startswith("{")]
+        assert [e["call_event"] for e in events] == ["ringing"]
+
+    def test_a_bad_pattern_is_a_usage_error(self, capsys, monkeypatch):
+        self._prepared(monkeypatch)
+        assert run("listen", "--bind", "127.0.0.1", "--exclude", "[") == 2
+        assert "invalid regular expression" in capsys.readouterr().err

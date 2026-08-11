@@ -3,7 +3,8 @@
 #
 # Defaults are set here and overridable from /etc/conf.d/obicaller:
 #   OBICALLER_PORT=5515
-#   OBICALLER_FORWARD=127.0.0.1:5514    # unset if nothing else wants the feed
+#   OBICALLER_FORWARD="127.0.0.1:5514 10.0.0.9:5515"   # space separated;
+#                                       # unset if nothing else wants the feed
 #   OBICALLER_LOG=/var/log/obicaller.jsonl
 #   OBICALLER_ARGS="--say"              # anything else you want passed
 
@@ -14,8 +15,16 @@ description="Live call events from an OBi ATA's syslog stream"
 : ${OBICALLER_LOG:=/var/log/obicaller.jsonl}
 : ${OBICALLER_ARGS:=""}
 
+# OBICALLER_FORWARD may name several targets, space separated. Each needs its
+# own --forward: passing them as one word makes the second look like a
+# positional argument and the daemon exits before it ever binds.
+_forward=""
+for _target in ${OBICALLER_FORWARD}; do
+    _forward="${_forward} --forward ${_target}"
+done
+
 command="/usr/bin/python3"
-command_args="/opt/obicaller/obicaller.py --port ${OBICALLER_PORT} --json --log ${OBICALLER_LOG} ${OBICALLER_FORWARD:+--forward ${OBICALLER_FORWARD}} ${OBICALLER_ARGS}"
+command_args="/opt/obicaller/obicaller.py --port ${OBICALLER_PORT} --json --log ${OBICALLER_LOG}${_forward} ${OBICALLER_ARGS}"
 command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/${RC_SVCNAME}.log"
