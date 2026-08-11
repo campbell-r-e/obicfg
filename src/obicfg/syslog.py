@@ -55,9 +55,15 @@ _SP = re.compile(r"\bSP([1-4])\b")
 _CID = re.compile(r"\[SLIC\]\s*CID to deliver:\s*(.*)", re.IGNORECASE)
 _NUMBER = re.compile(r"[+*#0-9][*#0-9]{2,}")
 
-#: Checked in order, so anything that contains a shorter needle must come
-#: first: "Unregistered" contains "registered", and labelling a service drop
-#: as a successful registration is exactly backwards.
+#: Checked in order, so anything containing a shorter needle comes first:
+#: "Unregistered" contains "registered", and calling a service drop a
+#: successful registration is exactly backwards.
+#:
+#: There is deliberately no bare "connected" needle. The device emits
+#: "TC:ssl connected" for the TLS handshake to its provider several times an
+#: hour, which was being recorded as a call being answered -- and then kept
+#: for a year by the retention rule for call events. A call reports "Call
+#: Connected".
 _CALL_EVENTS = (
     ("call connected", "connected"),
     ("call ended", "ended"),
@@ -66,7 +72,6 @@ _CALL_EVENTS = (
     ("unregistered", "unregistered"),
     ("registered", "registered"),
     ("ringing", "ringing"),
-    ("connected", "connected"),
     ("hangup", "ended"),
     ("hang up", "ended"),
 )
@@ -165,9 +170,13 @@ def parse_line(data: bytes, source: str = "", received_at: float | None = None) 
                 event.call_event = name
                 break
 
-    number = _NUMBER.search(event.caller or event.message)
-    if number:
-        event.number = number.group(0)
+    # Only where the line is actually about a call. Otherwise any digits
+    # anywhere become a "phone number": CallHistoryXmlSize=123633/205824
+    # yielded 123633, and PARAM Cache Write Back(256 bytes) yielded 256.
+    if event.caller or event.call_event:
+        number = _NUMBER.search(event.caller or event.message)
+        if number:
+            event.number = number.group(0)
     return event
 
 

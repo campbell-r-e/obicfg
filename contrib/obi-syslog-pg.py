@@ -57,6 +57,16 @@ import time
 
 __version__ = "1.0.0"
 
+#: Lines that are pure device housekeeping: no call, no fault, no meaning
+#: beyond "still alive". They are excluded at the listener, but rows written
+#: before an exclude existed -- or by a second consumer that has none -- still
+#: pile up, so the cleanup pass knows them too. SQL LIKE patterns.
+NOISE_PATTERNS = (
+    "BASE:resolving %",             # the retired OBiTALK provisioning retry
+    "CallHistoryXmlSize=%",         # a buffer gauge, once a minute
+    "PARAM Cache Write Back%",      # flash bookkeeping
+)
+
 COLUMNS = (
     "received_at", "source", "severity", "severity_name", "facility",
     "category", "sp", "call_event", "number", "message", "raw",
@@ -149,6 +159,46 @@ def create_schema(psql="psql"):
     return True
 
 
+def prune(keep_days=30, keep_call_days=365, drop_noise=True,
+          table="syslog_event", psql="psql", dry_run=False):
+    """Delete what is not worth keeping. Returns the SQL that was run.
+
+    Two retentions, because the rows are not equally valuable: a call event is
+    a record of something that happened to a person and is worth a year; a
+    line saying the device is still alive is worth a month at most. Noise is
+    worth nothing the moment it lands, but rows written before the listener
+    had an exclude for it are already in the table.
+    """
+    clauses = [
+        "DELETE FROM %s WHERE call_event IS NULL"
+        " AND received_at < now() - interval '%d days'" % (table, keep_days),
+        "DELETE FROM %s WHERE call_event IS NOT NULL"
+        " AND received_at < now() - interval '%d days'" % (table, keep_call_days),
+    ]
+    if drop_noise:
+        # Never delete a row that carries a call event, however it is worded.
+        likes = " OR ".join("message LIKE %s" % _literal(p) for p in NOISE_PATTERNS)
+        clauses.append(
+            "DELETE FROM %s WHERE call_event IS NULL AND (%s)" % (table, likes)
+        )
+    statement = ";\n".join(clauses) + ";"
+    if dry_run:
+        sys.stderr.write(statement + "\n")
+        return statement
+    process = subprocess.run(
+        [psql, "--quiet", "--no-psqlrc", "-v", "ON_ERROR_STOP=1", "-c", statement],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(process.stderr.strip() or "psql failed")
+    return statement
+
+
+def _literal(text):
+    """Quote a string for SQL. These are our own constants, but still."""
+    return "'" + text.replace("'", "''") + "'"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="obi-syslog-pg",
@@ -168,6 +218,14 @@ def main(argv=None):
                              "now, not once fifty have accumulated")
     parser.add_argument("--create", action="store_true",
                         help="create the table and indexes, then exit")
+    parser.add_argument("--prune", action="store_true",
+                        help="delete expired and junk rows, then exit")
+    parser.add_argument("--keep-days", type=int, default=30, metavar="N",
+                        help="how long to keep rows with no call event (default 30)")
+    parser.add_argument("--keep-call-days", type=int, default=365, metavar="N",
+                        help="how long to keep call events (default 365)")
+    parser.add_argument("--keep-noise", action="store_true",
+                        help="do not delete device housekeeping lines on sight")
     parser.add_argument("--dry-run", action="store_true",
                         help="print the COPY and its rows instead of running it")
     args = parser.parse_args(argv)
@@ -175,6 +233,13 @@ def main(argv=None):
     if args.create:
         create_schema(args.psql)
         print("schema ready")
+        return 0
+
+    if args.prune:
+        prune(args.keep_days, args.keep_call_days, not args.keep_noise,
+              args.table, args.psql, args.dry_run)
+        if not args.dry_run:
+            print("pruned")
         return 0
 
     pending = []

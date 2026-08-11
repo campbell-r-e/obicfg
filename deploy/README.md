@@ -162,6 +162,34 @@ top-down and first match wins.
 > With one device that is harmless; with several, either point them at
 > separate ports or key on something in the message.
 
+### Keeping the table from filling with nothing
+
+```sh
+install -D -m644 deploy/obi-syslog-pg-prune.service /etc/systemd/system/
+install -D -m644 deploy/obi-syslog-pg-prune.timer   /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now obi-syslog-pg-prune.timer
+```
+
+Retention is deliberately uneven, because the rows are not equally valuable:
+
+| what | kept | why |
+|---|---|---|
+| call events | 365 days | a record of something that happened to a person |
+| everything else | 30 days | "the device is still alive" ages badly |
+| housekeeping noise | deleted on sight | worth nothing the moment it lands |
+
+Noise means `BASE:resolving …`, `CallHistoryXmlSize=…` and `PARAM Cache Write
+Back…`. The listener already excludes the first of those, but rows written
+before an exclude existed — or by another consumer that has none — are already
+in the table. **Every noise clause is guarded on `call_event IS NULL`**, so a
+device that words a call line like a housekeeping line cannot lose it.
+
+Check before committing to it:
+
+```sh
+python3 /opt/obicaller/obi-syslog-pg.py --prune --dry-run   # prints the SQL
+```
+
 Some useful queries:
 
 ```sql

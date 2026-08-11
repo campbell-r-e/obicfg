@@ -31,6 +31,10 @@ class TestParsing:
         "text,expected",
         [
             (b"<6> Call Connected", "connected"),
+            # Observed on real hardware: the TLS handshake to the
+            # provider, several times an hour. Not a call.
+            (b"<7> TC:ssl connected", None),
+            (b"<7> Trying to connect ssl", None),
             (b"<6> Call Ended", "ended"),
             (b"<6> SP1 Ringing", "ringing"),
             (b"<7> SIP:SP1 Registered", "registered"),
@@ -161,3 +165,32 @@ class TestCallerID:
 
     def test_to_dict_includes_the_caller(self):
         assert "caller" in syslog.parse_line(b"<6> Call Ended").to_dict()
+
+
+class TestNumberExtraction:
+    """`number` must mean a phone number, not "some digits on the line"."""
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            b"<7> CallHistoryXmlSize=123633/205824",
+            b"<7> PARAM Cache Write Back(256 bytes)",
+            b"<7> BASE:resolving root.pnn.obihai.com",
+        ],
+    )
+    def test_housekeeping_lines_carry_no_number(self, line):
+        # These were yielding 123633 and 256 as "phone numbers", which then
+        # went into a database column named `number`.
+        event = syslog.parse_line(line)
+        assert event.call_event is None
+        assert event.number is None
+
+    def test_a_caller_id_line_still_yields_its_number(self):
+        assert syslog.parse_line(
+            b"<7> [SLIC] CID to deliver: '+17655551234'"
+        ).number == "+17655551234"
+
+    def test_a_call_line_still_yields_its_number(self):
+        assert syslog.parse_line(
+            b"<6> CALL:Incoming call from 5551234 on SP1"
+        ).number == "5551234"

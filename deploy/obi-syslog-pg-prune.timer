@@ -1,0 +1,13 @@
+# Run the cleanup daily, shortly after midnight, with a random delay so it
+# does not collide with every other timer on the machine.
+
+[Unit]
+Description=Daily prune of stored OBi syslog events
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=30m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

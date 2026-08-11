@@ -57,6 +57,10 @@ class TestParsing:
         "text,expected",
         [
             (b"<6> Call Connected", "connected"),
+            # Observed on real hardware: the TLS handshake to the
+            # provider, several times an hour. Not a call.
+            (b"<7> TC:ssl connected", None),
+            (b"<7> Trying to connect ssl", None),
             (b"<6> Call Ended", "ended"),
             (b"<6> SP1 Ringing", "ringing"),
             (b"<7> SIP:SP1 Registered", "registered"),
@@ -387,3 +391,22 @@ class TestCallerIDAndSpeech:
     def test_no_speech_engine_is_not_a_crash(self, obicaller, monkeypatch):
         monkeypatch.setattr(obicaller.shutil, "which", lambda name: None)
         assert obicaller.announce({"caller": "'5551234'"}) is False
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        b"<7> CallHistoryXmlSize=123633/205824",
+        b"<7> PARAM Cache Write Back(256 bytes)",
+    ],
+)
+def test_housekeeping_lines_carry_no_phone_number(obicaller, line):
+    event = obicaller.parse(line, now=0)
+    assert event["call_event"] is None
+    assert event["number"] is None
+
+
+def test_call_lines_still_carry_their_number(obicaller):
+    assert obicaller.parse(
+        b"<7> [SLIC] CID to deliver: '+17655551234'", now=0
+    )["number"] == "+17655551234"

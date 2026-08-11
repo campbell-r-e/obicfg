@@ -1,0 +1,22 @@
+# One cleanup pass over the stored events.
+#
+# Paired with obi-syslog-pg-prune.timer. Retention is deliberately uneven:
+# a call event records something that happened to a person and is kept for a
+# year; a line saying the device is still alive is kept a month; pure
+# housekeeping noise is deleted on sight, because rows written before the
+# listener had an exclude for it are already in the table.
+
+[Unit]
+Description=Prune stored OBi syslog events
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/obi-syslog-pg.env
+ExecStart=/usr/bin/python3 /opt/obicaller/obi-syslog-pg.py --prune \
+    --keep-days 30 --keep-call-days 365
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

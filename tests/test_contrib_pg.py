@@ -189,3 +189,76 @@ class TestEndToEnd:
 def test_it_credits_the_original_idea():
     source = SCRIPT.read_text()
     assert "YoRyan/obicaller" in source and "Ryan Young" in source
+
+
+class TestPrune:
+    """Automatic cleanup.
+
+    Two retentions, because the rows are not equally valuable: a call event
+    records something that happened to a person; a line saying the device is
+    still alive does not.
+    """
+
+    def test_it_keeps_calls_longer_than_everything_else(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        pg.prune(keep_days=30, keep_call_days=365, psql=str(stub))
+        sql = recorder.read_text()
+        assert "call_event IS NULL AND received_at < now() - interval '30 days'" in sql
+        assert "call_event IS NOT NULL AND received_at < now() - interval '365 days'" in sql
+
+    def test_noise_goes_on_sight(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        pg.prune(psql=str(stub))
+        sql = recorder.read_text()
+        for pattern in pg.NOISE_PATTERNS:
+            assert pattern in sql
+
+    def test_a_call_event_is_never_deleted_as_noise(self, pg):
+        # Every noise clause is guarded on call_event IS NULL. A device that
+        # words a call line like a housekeeping line must not lose it.
+        statement = pg.prune(dry_run=True)
+        for clause in statement.split(";"):
+            if "LIKE" in clause:
+                assert "call_event IS NULL" in clause
+
+    def test_noise_deletion_can_be_turned_off(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        pg.prune(drop_noise=False, psql=str(stub))
+        assert "LIKE" not in recorder.read_text()
+
+    def test_retentions_are_configurable(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        pg.prune(keep_days=7, keep_call_days=90, psql=str(stub))
+        sql = recorder.read_text()
+        assert "interval '7 days'" in sql and "interval '90 days'" in sql
+
+    def test_a_failure_is_raised(self, pg, tmp_path):
+        stub = tmp_path / "psql"
+        stub.write_text("#!/bin/sh\necho 'boom' >&2\nexit 1\n")
+        stub.chmod(0o755)
+        with pytest.raises(RuntimeError, match="boom"):
+            pg.prune(psql=str(stub))
+
+    def test_literals_are_escaped(self, pg):
+        assert pg._literal("it's") == "'it''s'"
+
+    def test_from_the_command_line(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--psql", str(stub), "--prune",
+             "--keep-days", "14"],
+            text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "pruned" in result.stdout
+        assert "interval '14 days'" in recorder.read_text()
+
+    def test_dry_run_prunes_nothing(self, pg, fake_psql):
+        stub, recorder = fake_psql
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--psql", str(stub), "--prune", "--dry-run"],
+            text=True, capture_output=True, timeout=30,
+        )
+        assert result.returncode == 0
+        assert not recorder.exists()
+        assert "DELETE FROM syslog_event" in result.stderr
