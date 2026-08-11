@@ -42,7 +42,7 @@ class TestStatus:
         assert status.serial == "0000TESTSERIAL"
         assert status.wan_ip == "192.0.2.50"
         assert status.uptime_s == 234434
-        assert status.reboots == 4
+        assert status.boot_code == 4
 
     def test_services_are_indexed_by_their_object_name(self, status):
         assert [s.sp for s in status.services] == [1, 2, 3]

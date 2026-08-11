@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import time
 from pathlib import Path
 
-from . import __version__, config as config_mod, telemetry
+from . import __version__, config as config_mod, syslog as syslog_mod, telemetry
 from .client import Client, Transport
 from .device import Device, count_redacted, diff_snapshots
 from .errors import (
@@ -661,7 +662,6 @@ def _print_telemetry(reading) -> None:
     _out(
         f"{device.model or '?'}  fw {device.firmware or '?'}  "
         f"up {_format_uptime(device.uptime_s)}"
-        + (f"  ({device.reboots} reboots)" if device.reboots is not None else "")
     )
     if device.system_time:
         _out(f"device clock: {device.system_time}")
@@ -747,6 +747,55 @@ def cmd_telemetry(args: argparse.Namespace) -> int:
             return EXIT_OK
         _out()
         _out("-" * 60)
+
+
+def cmd_listen(args: argparse.Namespace) -> int:
+    """Print the device's pushed syslog stream as it arrives."""
+    if args.setup:
+        host = config_mod.resolve("host", args.host, config_mod.load_config())
+        address = syslog_mod.local_address_for(str(host)) if host else "<your address>"
+        _out("Point the device at this listener by running:")
+        _out()
+        for line in syslog_mod.setup_commands(address, args.listen_port, args.level):
+            _out(f"  {line}")
+        _out()
+        _out(
+            "Not run for you: a syslog feed changes device behaviour and puts "
+            "call metadata on the network in the clear, so it is a decision to "
+            "take once, deliberately. Undo it with `obicfg unset admin.Server`."
+        )
+        return EXIT_OK
+
+    try:
+        listener = syslog_mod.open_listener(args.bind, args.listen_port)
+    except OSError as exc:
+        raise ObiError(
+            f"cannot listen on {args.bind}:{args.listen_port}: {exc}"
+            + (
+                " -- ports below 1024 need root; try --listen-port 5514 and "
+                "set the device's syslog port to match"
+                if args.listen_port < 1024
+                else ""
+            )
+        ) from None
+
+    if not args.json:
+        _out(f"listening on {listener.address[0]}:{listener.address[1]} (Ctrl-C to stop)")
+    deadline = time.time() + args.seconds if args.seconds else None
+    pattern = re.compile(args.filter, re.IGNORECASE) if args.filter else None
+    try:
+        for event in syslog_mod.events(listener, count=args.count, deadline=deadline):
+            if args.calls_only and not event.call_event:
+                continue
+            if pattern and not pattern.search(event.raw):
+                continue
+            _out(json.dumps(event.to_dict()) if args.json else event.format())
+            sys.stdout.flush()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        listener.sock.close()
+    return EXIT_OK
 
 
 def cmd_reboot(args: argparse.Namespace) -> int:
@@ -970,6 +1019,21 @@ def build_parser() -> argparse.ArgumentParser:
                      help="mask phone numbers, and the device serial and MAC")
     tel.add_argument("--watch", type=float, metavar="SECONDS",
                      help="repeat every SECONDS until interrupted")
+
+    listen = add("listen", cmd_listen,
+                 "print the syslog stream the device pushes, as it happens")
+    listen.add_argument("--bind", default="0.0.0.0", help="address to listen on")
+    listen.add_argument("--listen-port", type=int, default=5514, metavar="PORT",
+                        help="UDP port to listen on (default 5514; 514 needs root)")
+    listen.add_argument("--calls-only", action="store_true",
+                        help="only lines that mark a point in a call's life")
+    listen.add_argument("--filter", metavar="REGEX", help="only lines matching this")
+    listen.add_argument("--count", type=int, metavar="N", help="stop after N events")
+    listen.add_argument("--seconds", type=float, metavar="S", help="stop after S seconds")
+    listen.add_argument("--level", type=int, default=7,
+                        help="syslog level to suggest in --setup (default 7, most verbose)")
+    listen.add_argument("--setup", action="store_true",
+                        help="print the commands that would point the device here, and exit")
 
     reboot = add("reboot", cmd_reboot, "reboot the device", json_flag=False)
     reboot.add_argument("--wait", action="store_true", help="block until it answers again")

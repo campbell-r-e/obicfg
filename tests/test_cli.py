@@ -9,6 +9,7 @@ a breaking change even if the message is identical.
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from conftest import FakeClient, make_device
@@ -1053,3 +1054,126 @@ def test_probe_reports_when_the_original_value_cannot_be_written_back(
     assert "restore FAILED" in text
     assert "could NOT be restored" in text
     assert "'Front Desk Extension'" in text  # tells you what to put back
+
+
+class TestListen:
+    """The syslog listener, driven through the CLI over real UDP sockets.
+
+    The datagrams are sent *before* the command runs. A UDP socket buffers
+    what arrives while nobody is reading, so this is deterministic -- unlike
+    sending from a thread and hoping the listener has bound by then, where a
+    datagram that arrives too early is dropped without trace and the test
+    either flakes or waits forever.
+    """
+
+    def _prepared(self, monkeypatch, *payloads, timeout=1.0):
+        """Bind a socket, queue the payloads on it, and hand it to the CLI."""
+        import socket as _socket
+
+        from obicfg import syslog as syslog_mod
+
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        sock.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+        sock.bind(("127.0.0.1", 0))
+        sock.settimeout(timeout)
+        port = sock.getsockname()[1]
+
+        sender = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        for payload in payloads:
+            sender.sendto(payload, ("127.0.0.1", port))
+        sender.close()
+        time.sleep(0.1)  # let the kernel deliver into the receive buffer
+
+        listener = syslog_mod.Listener(bind="127.0.0.1", port=port, sock=sock)
+        monkeypatch.setattr(syslog_mod, "open_listener", lambda *a, **k: listener)
+        return listener
+
+    def _listen(self, *extra):
+        # --seconds is a backstop: a missing datagram must fail, not hang.
+        return run("listen", "--bind", "127.0.0.1", "--seconds", "15", *extra)
+
+    def test_it_prints_events_as_they_arrive(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, b"<6> CALL:Incoming call from +15551234567 on SP2\x00")
+        assert self._listen("--count", "1") == 0
+        text = out(capsys)
+        assert "listening on 127.0.0.1" in text
+        assert "SP2" in text and "[ringing]" in text
+
+    def test_json_output(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, b"<7> SIP:SP1 Registered")
+        assert self._listen("--count", "1", "--json") == 0
+        event = json.loads(out(capsys).strip())
+        assert event["call_event"] == "registered"
+        assert event["sp"] == 1
+        assert event["severity_name"] == "debug"
+        assert event["source"] == "127.0.0.1"
+
+    def test_calls_only_drops_the_noise(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, b"<7> SYS:noise", b"<6> Call Ended")
+        assert self._listen("--count", "2", "--calls-only", "--json") == 0
+        events = [json.loads(x) for x in out(capsys).splitlines() if x.startswith("{")]
+        assert [e["call_event"] for e in events] == ["ended"]
+
+    def test_filter_keeps_only_matching_lines(self, capsys, monkeypatch):
+        self._prepared(monkeypatch, b"<7> SYS:noise", b"<6> Call Ended")
+        assert self._listen("--count", "2", "--filter", "noise", "--json") == 0
+        events = [json.loads(x) for x in out(capsys).splitlines() if x.startswith("{")]
+        assert len(events) == 1 and "noise" in events[0]["raw"]
+
+    def test_it_stops_on_a_deadline_when_nothing_arrives(self, capsys, monkeypatch):
+        self._prepared(monkeypatch)
+        assert run("listen", "--bind", "127.0.0.1", "--seconds", "0.1") == 0
+
+    def test_a_closed_socket_ends_the_stream(self, capsys, monkeypatch):
+        listener = self._prepared(monkeypatch, b"<6> Call Ended")
+        listener.sock.close()
+        assert self._listen("--json") == 0
+
+    def test_ctrl_c_is_a_clean_exit(self, capsys, monkeypatch):
+        from obicfg import syslog as syslog_mod
+
+        self._prepared(monkeypatch)
+
+        def interrupt(*a, **k):
+            raise KeyboardInterrupt
+
+        monkeypatch.setattr(syslog_mod, "events", interrupt)
+        assert self._listen() == 0
+
+    def test_a_privileged_port_says_how_to_avoid_it(self, capsys, monkeypatch):
+        from obicfg import syslog as syslog_mod
+
+        def refuse(*a, **k):
+            raise OSError("Permission denied")
+
+        monkeypatch.setattr(syslog_mod, "open_listener", refuse)
+        assert run("listen", "--listen-port", "514") == 1
+        assert "--listen-port 5514" in capsys.readouterr().err
+
+    def test_a_high_port_failure_omits_the_root_hint(self, capsys, monkeypatch):
+        from obicfg import syslog as syslog_mod
+
+        def refuse(*a, **k):
+            raise OSError("Address already in use")
+
+        monkeypatch.setattr(syslog_mod, "open_listener", refuse)
+        assert run("listen", "--listen-port", "5515") == 1
+        err = capsys.readouterr().err
+        assert "already in use" in err and "need root" not in err
+
+    def test_setup_prints_commands_and_runs_nothing(self, capsys, monkeypatch):
+        monkeypatch.setattr(
+            cli.config_mod, "load_config", lambda: {"device": {"host": "192.0.2.50"}}
+        )
+        monkeypatch.setattr(cli.syslog_mod, "local_address_for", lambda h: "192.0.2.71")
+        assert run("listen", "--setup") == 0
+        text = out(capsys)
+        assert "obicfg set admin.Server=192.0.2.71" in text
+        assert "admin.Port=5514" in text
+        assert "Not run for you" in text
+
+    def test_setup_without_a_configured_host(self, capsys, monkeypatch):
+        monkeypatch.setattr(cli.config_mod, "load_config", dict)
+        monkeypatch.delenv("OBI_HOST", raising=False)
+        assert run("listen", "--setup") == 0
+        assert "<your address>" in out(capsys)

@@ -254,25 +254,100 @@ class TestDuplicateNames:
         )
         return Device(client, Guard(enabled=False))
 
-    def test_a_snapshot_keeps_both(self):
+    def test_a_snapshot_qualifies_every_member_of_a_duplicated_set(self):
         # Keying on the bare name kept only the last, so a backup silently
-        # lost rows and no diff could ever see the dropped one change.
+        # lost rows. Qualifying only the later ones would leave the first
+        # holding a bare key that means something different from its siblings.
         entries = self._device().snapshot(
             include_status=True, writable_only=False
         )["pages"]["EXAMPLE_SYS_"]["parameters"]
-        assert entries["MACAddress"]["value"] == "000000000001"
+        assert entries["WAN Status.MACAddress"]["value"] == "000000000001"
         assert entries["Product Information.MACAddress"]["value"] == "000000000002"
+        assert "MACAddress" not in entries
+        # Names that are not duplicated stay unqualified.
+        assert "ModelName" in entries
 
-    def test_both_are_addressable_by_path(self):
+    def test_an_ambiguous_name_is_refused_rather_than_guessed(self):
+        # A codec profile has five BitRates, one per codec, and only one is
+        # writable. Answering with the first match points a write at the wrong
+        # codec and says nothing about it.
         device = self._device()
-        assert device.parameter("EXAMPLE_SYS_.MACAddress").hash == "bbbb0001"
-        # The qualified form has to work on a raw page name, not only an alias.
+        with pytest.raises(ResolutionError, match="ambiguous") as excinfo:
+            device.parameter("EXAMPLE_SYS_.MACAddress")
+        message = str(excinfo.value)
+        assert "WAN Status.MACAddress" in message
+        assert "Product Information.MACAddress" in message
+        assert "read-only" in message
+
+    def test_the_qualified_form_resolves_exactly(self):
+        device = self._device()
         assert (
             device.parameter("EXAMPLE_SYS_.Product Information.MACAddress").hash
             == "bbbb0003"
+        )
+        assert (
+            device.parameter("EXAMPLE_SYS_.WAN Status.MACAddress").hash == "bbbb0001"
         )
 
     def test_a_genuinely_missing_page_still_reports_itself(self):
         device = self._device()
         with pytest.raises(ResolutionError, match="no page named"):
             device.parameter("NOPE_.Thing.Sub")
+
+
+class TestHashAddressing:
+    """`<page>#<hash>` is the only form that always resolves.
+
+    The RTP statistics page carries four objects all named "Reset
+    Statistics", so Object.Name cannot separate them either.
+    """
+
+    def _device(self):
+        client = FakeClient(pages={"EXAMPLE_SYS_": fixture("EXAMPLE_SYS_.xml")})
+        client.menu = (
+            """<a href="#" onclick="e('EXAMPLE_SYS_.xml')" class="cmenu">Sys</a>"""
+        )
+        return Device(client, Guard(enabled=False))
+
+    def test_a_hash_resolves_exactly(self):
+        device = self._device()
+        assert device.parameter("EXAMPLE_SYS_#bbbb0001").obj == "WAN Status"
+        assert device.parameter("EXAMPLE_SYS_#bbbb0003").obj == "Product Information"
+
+    def test_whitespace_around_the_hash_is_tolerated(self):
+        assert self._device().parameter("EXAMPLE_SYS_# bbbb0003 ").hash == "bbbb0003"
+
+    def test_an_unknown_hash_says_how_to_list_them(self):
+        with pytest.raises(ResolutionError, match="show EXAMPLE_SYS_ --json"):
+            self._device().parameter("EXAMPLE_SYS_#nosuchhash")
+
+    def test_the_ambiguity_message_offers_the_hash_form(self):
+        with pytest.raises(ResolutionError) as excinfo:
+            self._device().parameter("EXAMPLE_SYS_.MACAddress")
+        message = str(excinfo.value)
+        assert "EXAMPLE_SYS_#bbbb0001" in message
+        assert "EXAMPLE_SYS_#bbbb0003" in message
+        assert "#hash form always works" in message
+
+
+def test_the_guard_still_fires_on_a_hash_addressed_write():
+    # The hash form bypasses split_path, so the early static check has to
+    # understand it too -- otherwise #hash is a way around the protection.
+    client = FakeClient(pages={"SetupWizard": fixture("EXAMPLE_SVC_.xml")})
+    client.menu = (
+        """<a href="#" onclick="e('SetupWizard.xml')" class="cmenu">Wizard</a>"""
+    )
+    device = Device(client, Guard())
+    with pytest.raises(GuardError, match="Setup Wizard"):
+        device.plan([("SetupWizard#aaaa0007", "x")])
+
+
+def test_a_hash_addressed_write_on_an_unprotected_page_proceeds():
+    # The other half of the guard-and-hash interaction: the early check must
+    # let an ordinary page through rather than refusing every #hash path.
+    device = make_device()
+    device.guard = Guard()
+    parameter = device.parameter("VS_1_VP_1_L_2_#a0020007")
+    changes = device.plan([(f"VS_1_VP_1_L_2_#{parameter.hash}", "Lobby")])
+    assert changes[0].parameter.name == "CallerIDName"
+    assert changes[0].new == "Lobby"

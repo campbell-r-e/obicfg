@@ -1,0 +1,38 @@
+# systemd service for contrib/obicaller.py.
+#
+#   install -D -m755 contrib/obicaller.py /opt/obicaller/obicaller.py
+#   install -D -m644 deploy/obicaller.service /etc/systemd/system/obicaller.service
+#   systemctl daemon-reload && systemctl enable --now obicaller
+#
+# Override the defaults without editing this file:
+#   systemctl edit obicaller     ->  [Service] Environment=OBICALLER_PORT=5600
+
+[Unit]
+Description=Live call events from an OBi ATA's syslog stream
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=OBICALLER_PORT=5515
+Environment=OBICALLER_FORWARD=127.0.0.1:5514
+Environment=OBICALLER_LOG=/var/log/obicaller.jsonl
+ExecStart=/usr/bin/python3 /opt/obicaller/obicaller.py \
+    --port ${OBICALLER_PORT} --json \
+    --forward ${OBICALLER_FORWARD} \
+    --log ${OBICALLER_LOG}
+Restart=on-failure
+RestartSec=5
+
+# It only ever receives on a UDP socket and writes its own log.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log
+# Uncomment if you use --say and need the sound device:
+# SupplementaryGroups=audio
+# PrivateDevices=no
+
+[Install]
+WantedBy=multi-user.target

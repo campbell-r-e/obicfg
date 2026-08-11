@@ -158,3 +158,63 @@ class TestParsingEdges:
             "</object></model>"
         )
         assert objects == [("O", {"Has": "d"})]
+
+
+class TestAmbiguousNames:
+    PAGE = (
+        '<model><object name="G711U Codec">'
+        '<parameter name="BitRate" access="readOnly"><value hash="1" default="64000"/></parameter>'
+        '<parameter name="Enable"><value hash="2" type="bool" default="true"/></parameter>'
+        "</object>"
+        '<object name="iLBC Codec">'
+        '<parameter name="BitRate"><value hash="3" default="13333"/></parameter>'
+        '<parameter name="Enable"><value hash="4" type="bool" default="false"/></parameter>'
+        "</object></model>"
+    )
+
+    def test_candidates_returns_every_match_in_order(self):
+        page = parse_page("CODEC", self.PAGE)
+        matches = page.candidates("BitRate")
+        assert [m.obj for m in matches] == ["G711U Codec", "iLBC Codec"]
+        assert [m.writable for m in matches] == [False, True]
+
+    def test_a_qualified_name_selects_exactly_one(self):
+        page = parse_page("CODEC", self.PAGE)
+        assert page.candidates("iLBC Codec.BitRate")[0].hash == "3"
+        assert len(page.candidates("iLBC Codec.BitRate")) == 1
+
+    def test_an_unknown_name_has_no_candidates(self):
+        assert parse_page("CODEC", self.PAGE).candidates("Nope") == []
+
+    def test_the_writable_one_is_not_the_first(self):
+        # This is why first-match-wins was wrong: `set CODEC.BitRate=X` hit a
+        # read-only G711U parameter while the user meant iLBC.
+        page = parse_page("CODEC", self.PAGE)
+        assert page.get("BitRate").writable is False
+        assert page.candidates("iLBC Codec.BitRate")[0].writable is True
+
+
+def test_an_over_long_value_is_allowed_where_the_device_already_exceeds_its_own_limit():
+    # Real case: OBiPLUS ships an inbound route of 276 characters on a page
+    # declaring a 128 maximum. Refusing would make it uneditable, including
+    # writing back what is already there.
+    page = parse_page(
+        "X",
+        '<model><object name="O"><parameter name="P"><syntax><string>'
+        '<size maxLength="4"/></string></syntax>'
+        '<value hash="1" type="input" default="" current="far too long"/>'
+        "</parameter></object></model>",
+    )
+    assert page.get("P").coerce("also too long") == "also too long"
+
+
+def test_an_over_long_value_is_refused_when_the_limit_is_being_honoured():
+    page = parse_page(
+        "X",
+        '<model><object name="O"><parameter name="P"><syntax><string>'
+        '<size maxLength="4"/></string></syntax>'
+        '<value hash="1" type="input" default="ok"/>'
+        "</parameter></object></model>",
+    )
+    with pytest.raises(ValidationError, match="maximum is 4"):
+        page.get("P").coerce("too long")

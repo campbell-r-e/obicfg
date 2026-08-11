@@ -9,6 +9,7 @@ Every command, every flag, and the exact shape of every `--json` output.
 - Writing: [`set`](#set) · [`unset`](#unset) · [`apply`](#apply)
 - Backups: [`dump`](#dump) · [`diff`](#diff)
 - Device: [`reboot`](#reboot) · [`probe`](#probe)
+- Live: [`listen`](#listen)
 - [Profile format](#profile-format)
 - [Config file format](#config-file-format)
 
@@ -483,7 +484,7 @@ recorded in `errors` rather than raised — partial telemetry beats none.
 {
   "device": {
     "model": "OBi200", "firmware": "3.2.2 (Build: 8680EX)", "hardware": "1.4",
-    "serial": "...", "mac": "...", "uptime_s": 234434, "reboots": 4,
+    "serial": "...", "mac": "...", "uptime_s": 234434, "boot_code": 4,
     "system_time": "16:30:45     08/10/2026, Monday", "wan_ip": "192.0.2.50",
     "obitalk_status": "Backing Off (29)",
     "services": [
@@ -528,7 +529,67 @@ Notes on interpreting it:
   Configured"` usually means that service's `URI` is empty.
 - `ring_s` and `talk_s` come from the gaps between call events, and tolerate a
   call that spans midnight.
+- `uptime_s` is how long since the last boot. `boot_code` is the bracketed
+  number the device appends to its uptime string; it is **not** a reboot
+  count — it was measured unchanged across a deliberate reboot — and its
+  meaning is undocumented. Detect a restart from `uptime_s` going backwards.
 - Call history is personal data. Use `--redact` before sharing.
+
+## `listen`
+
+Print the syslog stream the device *pushes*, as it happens.
+
+```sh
+obicfg listen [--json] [--bind ADDR] [--listen-port PORT] [--calls-only]
+              [--filter REGEX] [--count N] [--seconds S] [--level L] [--setup]
+```
+
+| Flag | Meaning |
+|---|---|
+| `--bind` | Address to listen on (default `0.0.0.0`) |
+| `--listen-port` | UDP port to listen on (default `5514`... see below; `514` needs root). Named to avoid colliding with the global `--port`, which is the device's admin port |
+| `--calls-only` | Only lines that mark a point in a call's life |
+| `--filter` | Only lines matching this regular expression |
+| `--count` / `--seconds` | Stop after N events, or S seconds |
+| `--setup` | Print the commands that would point the device here, and exit. Runs nothing |
+
+Every other command polls. Call history only appears once a call is over, and
+a registration that flaps between two polls is invisible. This is the only
+real-time interface the hardware has.
+
+The device must be told where to send. `--setup` works out which of your
+addresses it would reach you on and prints the writes, without making them:
+
+```console
+$ obicfg listen --setup
+Point the device at this listener by running:
+
+  obicfg set admin.Server=192.0.2.71
+  obicfg set admin.Port=5514
+  obicfg set admin.Level=7
+```
+
+Turning the feed on changes device behaviour and puts call metadata on the
+local network in the clear, so it is left as a deliberate, one-time decision.
+Undo it with `obicfg unset admin.Server`.
+
+```json
+{"received_at": 1786000000.0, "source": "192.0.2.50",
+ "raw": "<6> CALL:Incoming call from +15551234567 on SP2",
+ "message": "CALL:Incoming call from +15551234567 on SP2",
+ "severity": 6, "severity_name": "info", "facility": 0,
+ "category": "call", "sp": 2, "call_event": "ringing",
+ "number": "+15551234567"}
+```
+
+`call_event` is one of `ringing`, `connected`, `ended`, `registered`,
+`unregistered`, `registration_failed`, or `null` for everything else. Lines
+that cannot be classified are still emitted, with `raw` intact.
+
+**A device sends syslog to one address only.** If something already listens
+for it, run [`contrib/obicaller.py`](../contrib/obicaller.py) instead — a
+standalone daemon that relays each datagram on to the existing consumer while
+doing its own thing with it. See [`deploy/`](../deploy/).
 
 ## `reboot`
 

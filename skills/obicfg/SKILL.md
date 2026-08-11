@@ -101,7 +101,7 @@ Pass `--json` on every command that supports it and parse stdout:
 
 | `--json` supported | no `--json` |
 |---|---|
-| `pages` `show` `search` `get` `set` `unset` `apply` `diff` `status` `telemetry` `probe` | `dump` `reboot` |
+| `pages` `show` `search` `get` `set` `unset` `apply` `diff` `status` `telemetry` `probe` `listen` | `dump` `reboot` |
 
 Errors are JSON too, whenever `--json` was requested: `{"error": ..., "kind":
 ..., "exit": N}` on stdout, with the prose on stderr. `kind` is one of
@@ -245,7 +245,7 @@ rather than `0` when nothing has flowed):
 
 ```json
 {
-  "device": {"model": "OBi200", "uptime_s": 234434, "reboots": 4,
+  "device": {"model": "OBi200", "uptime_s": 234434, "boot_code": 4,
              "services": [{"sp": 1, "status": "Connected", "active_calls": 0}]},
   "port":   {"state": "On Hook", "loop_current_ma": 0.0, "vbat_v": 56.0},
   "quality":[{"sp": 1, "packets_received": 138858, "packets_lost": 0,
@@ -287,7 +287,8 @@ Map the complaint to the evidence:
 | "audio breaks up / robotic" | `quality[].loss_percent`, `overruns`, `underruns` per service |
 | "no dial tone", "phone dead" | `port.state`, `loop_current_ma`, `vbat_v` |
 | "the call dropped" | `calls[]` — `connected` (or its alias `answered`), `ring_s`, `talk_s`, and the raw `events`. Check `calls_included` first: it is `false` if `--no-calls` was used, and then an empty list means nothing at all |
-| "did it reboot?" | `device.uptime_s` and `device.reboots` |
+| "what is happening right now" | `obicfg listen --calls-only --json` — the device pushes live call and registration events over syslog. It has to be pointed at you first: `obicfg listen --setup` prints the writes and runs none of them. Ask before enabling it; it puts caller numbers on the network in the clear |
+| "did it reboot?" | `device.uptime_s` — a restart shows as uptime going backwards. Do **not** use `boot_code`; it is not a reboot counter |
 
 ## When a write silently fails (exit 3)
 

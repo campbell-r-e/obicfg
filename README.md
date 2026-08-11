@@ -119,6 +119,27 @@ Settings on the same page go out in a single request, which is what the web UI
 does when you press Submit. Reconfiguring twenty settings is a couple of round
 trips, not twenty.
 
+### Live events
+
+Everything above polls. The device will also *push* — a plain UDP syslog
+stream carrying call setup, answer, teardown and registration changes as they
+happen, which is the only real-time interface it has.
+
+```sh
+obicfg listen --setup                 # print the writes that point it at you
+obicfg listen --calls-only --json     # then watch
+```
+
+A device sends syslog to exactly one address, so if something already collects
+it, use [`contrib/obicaller.py`](contrib/obicaller.py) — a standalone,
+dependency-free daemon that relays each datagram on to the existing consumer
+while announcing callers, logging, or running a hook. Service units and deployment notes are in [`deploy/`](deploy/).
+
+The idea of using this stream as a live event source is not mine: it comes
+from [obicaller](https://github.com/YoRyan/obicaller) by Ryan Young, a
+public-domain talking caller-ID daemon. No code is reused; the insight is
+credited in full at the top of `contrib/obicaller.py`.
+
 ### Backups and drift
 
 ```sh
@@ -327,6 +348,15 @@ behaviour most worth testing against.
 Nothing vendor-supplied is included in this repository — no firmware, no
 stylesheets, no captured configuration. The fixtures are synthetic files
 written to match the shape of the device's output.
+
+## Acknowledgements
+
+The live-event approach in `contrib/obicaller.py` — treating the device's UDP
+syslog stream as a real-time call feed — comes from
+[**obicaller**](https://github.com/YoRyan/obicaller) by **Ryan Young**, a
+public-domain talking caller-ID daemon for the OBi200, archived in 2022. No
+code from it is reused here; it is a shell script and this is Python. The name
+is kept in tribute.
 
 ## License
 

@@ -150,6 +150,14 @@ class Parameter:
             return str(number)
 
         if self.syntax.max_length is not None and len(text) > self.syntax.max_length:
+            # The declared maximum is not always enforced by the device: the
+            # OBiPLUS inbound route ships holding 276 characters on a page
+            # that declares 128. Where the current value already exceeds the
+            # limit, the limit is demonstrably advisory, and refusing would
+            # make that parameter uneditable by this tool -- including putting
+            # back what is already there.
+            if len(self.value) > self.syntax.max_length:
+                return text
             raise ValidationError(
                 f"{self.path}: value is {len(text)} characters, "
                 f"maximum is {self.syntax.max_length}"
@@ -172,11 +180,12 @@ class Page:
         return f"{self.name}.xml"
 
     def get(self, name: str) -> Parameter | None:
-        """Look a parameter up by name, case-insensitively.
+        """First parameter matching ``name``, case-insensitively.
 
-        Names are unique per page in practice; where a page repeats a name
-        across two ``<object>`` blocks (the status pages do this), the
-        qualified ``Object.Name`` form disambiguates.
+        Names are **not** unique per page -- a codec profile repeats
+        ``BitRate`` once per codec -- so this is only safe where the caller
+        knows the name is unique.  Anything acting on user input should use
+        :meth:`candidates` and refuse to guess.
         """
         wanted = name.lower()
         for param in self.parameters:
@@ -186,6 +195,25 @@ class Page:
             if f"{param.obj}.{param.name}".lower() == wanted:
                 return param
         return None
+
+    def candidates(self, name: str) -> list:
+        """Every parameter a name could mean, in document order.
+
+        Names are not unique per page.  A codec profile carries five
+        ``BitRate`` parameters -- one per codec -- and only one of them is
+        writable, so answering with the first match silently points a write at
+        the wrong codec.  Callers that must not guess use this instead of
+        :meth:`get`.
+        """
+        wanted = name.lower()
+        exact = [
+            param
+            for param in self.parameters
+            if f"{param.obj}.{param.name}".lower() == wanted
+        ]
+        if exact:
+            return exact
+        return [param for param in self.parameters if param.name.lower() == wanted]
 
     def by_hash(self, hash_: str) -> Parameter | None:
         return next((p for p in self.parameters if p.hash == hash_), None)

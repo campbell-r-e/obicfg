@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# OpenRC service for contrib/obicaller.py (Alpine, Gentoo, and friends).
+#
+# Defaults are set here and overridable from /etc/conf.d/obicaller:
+#   OBICALLER_PORT=5515
+#   OBICALLER_FORWARD=127.0.0.1:5514    # unset if nothing else wants the feed
+#   OBICALLER_LOG=/var/log/obicaller.jsonl
+#   OBICALLER_ARGS="--say"              # anything else you want passed
+
+name="obicaller"
+description="Live call events from an OBi ATA's syslog stream"
+
+: ${OBICALLER_PORT:=5515}
+: ${OBICALLER_LOG:=/var/log/obicaller.jsonl}
+: ${OBICALLER_ARGS:=""}
+
+command="/usr/bin/python3"
+command_args="/opt/obicaller/obicaller.py --port ${OBICALLER_PORT} --json --log ${OBICALLER_LOG} ${OBICALLER_FORWARD:+--forward ${OBICALLER_FORWARD}} ${OBICALLER_ARGS}"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.err"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --file --mode 0644 "${OBICALLER_LOG}"
+}

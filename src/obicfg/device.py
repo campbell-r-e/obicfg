@@ -127,7 +127,24 @@ class Device:
     # -- reads ------------------------------------------------------------
 
     def parameter(self, path: str, *, refresh: bool = False) -> Parameter:
-        """Resolve ``sp2.X_InboundCallRoute`` (or the raw form) to a parameter."""
+        """Resolve ``sp2.X_InboundCallRoute`` (or the raw form) to a parameter.
+
+        ``<page>#<hash>`` addresses a parameter by its wire identity. That is
+        the only form that always works: the RTP statistics page carries four
+        objects *all* named "Reset Statistics", so even ``Object.Name`` cannot
+        pick one out. The hash is unique by construction.
+        """
+        if "#" in path:
+            page_name, _, wanted_hash = path.partition("#")
+            page = self.page(page_name, refresh=refresh)
+            parameter = page.by_hash(wanted_hash.strip())
+            if parameter is None:
+                raise ResolutionError(
+                    f"page {page.name} has no parameter with hash "
+                    f"{wanted_hash.strip()!r} -- `obicfg show {page.name} --json` "
+                    "lists them"
+                )
+            return parameter
         page_name, param_name = split_path(path)
         try:
             page = self.page(page_name, refresh=refresh)
@@ -140,7 +157,21 @@ class Device:
                 raise
             page = self.page(head, refresh=refresh)
             param_name = f"{tail}.{param_name}"
-        parameter = page.get(param_name)
+        matches = page.candidates(param_name)
+        if len(matches) > 1:
+            raise ResolutionError(
+                f"{param_name!r} is ambiguous on page {page.name} ({page.title}) "
+                f"-- it names {len(matches)} parameters. Say which one:\n"
+                + "\n".join(
+                    f"  {page.name}#{m.hash}  ({m.obj}.{m.name})"
+                    f"{'' if m.writable else '  [read-only]'}"
+                    f"  = {m.value!r}"
+                    for m in matches
+                )
+                + "\n  Object.Name works where the object names differ; the "
+                "#hash form always works."
+            )
+        parameter = matches[0] if matches else None
         if parameter is None:
             near = [
                 p.name
@@ -193,19 +224,27 @@ class Device:
         pages: dict[str, dict] = {}
         for page in self.iter_pages(names):
             entries = {}
+            duplicated_names: dict = {}
+            for parameter in page.parameters:
+                key = parameter.name.lower()
+                duplicated_names[key] = duplicated_names.get(key, 0) + 1
             for parameter in page.parameters:
                 if writable_only and not parameter.writable:
                     continue
                 value = parameter.value
                 if redact and _is_secret(parameter):
                     value = "<redacted>"
-                # A page may repeat a name across <object> blocks (the status
-                # pages do). Keying on the bare name kept only the last, so a
-                # backup silently lost rows and a diff could never see them
-                # change. Qualify the collisions.
-                key = parameter.name
-                if key in entries:
-                    key = f"{parameter.obj}.{parameter.name}"
+                # A page may repeat a name across <object> blocks -- a codec
+                # profile has five BitRates. Keying on the bare name kept only
+                # the last, so a backup silently lost rows. Qualify every
+                # member of a duplicated set, not just the later ones, or the
+                # first keeps a bare key that means something different from
+                # the others.
+                key = (
+                    f"{parameter.obj}.{parameter.name}"
+                    if duplicated_names.get(parameter.name.lower(), 0) > 1
+                    else parameter.name
+                )
                 entries[key] = {
                     "hash": parameter.hash,
                     "value": value,
@@ -268,6 +307,10 @@ class Device:
 
     def _guard_check_early(self, path: str) -> None:
         """Refuse a protected page before we even look it up on the device."""
+        if "#" in path:
+            page_name, _, wanted_hash = path.partition("#")
+            self.guard.check_static(f"{page_name}.{wanted_hash.strip()}")
+            return
         page_name, param_name = split_path(path)
         self.guard.check_static(f"{page_name}.{param_name}")
 

@@ -44,10 +44,13 @@ ENDPOINTS = (
     ENDPOINT_CALLS,
 )
 
-# " 2 Days 17:07:14    (4)" -- the trailing count is reboots since power-on.
+# " 2 Days 17:07:14    (4)" -- the trailing number is NOT a reboot count.
+# Measured: it read (4) before a deliberate reboot and (4) immediately after,
+# with uptime reset to seconds. Its meaning is undocumented, so it is reported
+# as an opaque code rather than given a name that would be a lie.
 _UPTIME = re.compile(
     r"(?:(?P<days>\d+)\s*Days?\s*)?(?P<h>\d+):(?P<m>\d{2}):(?P<s>\d{2})"
-    r"(?:\s*\((?P<reboots>\d+)\))?",
+    r"(?:\s*\((?P<code>\d+)\))?",
     re.IGNORECASE,
 )
 # "From SP1(+15551234567)" / "To PH(1001)"
@@ -70,7 +73,8 @@ def _float(text: str | None) -> float | None:
 
 
 def parse_uptime(text: str | None) -> tuple[int | None, int | None]:
-    """``" 2 Days 17:07:14    (4)"`` -> ``(233234, 4)`` seconds and reboots."""
+    """``" 2 Days 17:07:14    (4)"`` -> ``(233234, 4)``: seconds, and the
+    trailing code whose meaning is unknown (it is not a reboot count)."""
     if not text:
         return None, None
     match = _UPTIME.search(text)
@@ -82,8 +86,8 @@ def parse_uptime(text: str | None) -> tuple[int | None, int | None]:
         + int(match.group("m")) * 60
         + int(match.group("s"))
     )
-    reboots = match.group("reboots")
-    return seconds, int(reboots) if reboots else None
+    code = match.group("code")
+    return seconds, int(code) if code else None
 
 
 # -- models ---------------------------------------------------------------
@@ -119,7 +123,9 @@ class DeviceStatus:
     serial: str | None = None
     mac: str | None = None
     uptime_s: int | None = None
-    reboots: int | None = None
+    #: The bracketed number the device appends to UpTime. Not a reboot count
+    #: -- verified unchanged across a real reboot -- and otherwise unexplained.
+    boot_code: int | None = None
     system_time: str | None = None
     wan_ip: str | None = None
     obitalk_status: str | None = None
@@ -232,7 +238,7 @@ def parse_status(xml: bytes | str) -> DeviceStatus:
     def find(object_name: str, key: str) -> str | None:
         return flat.get((object_name, key))
 
-    uptime_s, reboots = parse_uptime(find("Product Information", "UpTime"))
+    uptime_s, boot_code = parse_uptime(find("Product Information", "UpTime"))
     services = []
     for index in range(1, 5):
         name = f"SP{index} Service Status"
@@ -255,7 +261,7 @@ def parse_status(xml: bytes | str) -> DeviceStatus:
         serial=find("Product Information", "SerialNumber"),
         mac=find("Product Information", "MACAddress") or find("WAN Status", "MACAddress"),
         uptime_s=uptime_s,
-        reboots=reboots,
+        boot_code=boot_code,
         system_time=(find("Product Information", "SystemTime") or "").strip() or None,
         wan_ip=find("WAN Status", "IPAddress"),
         obitalk_status=find("OBiTALK Service Status", "Status"),
